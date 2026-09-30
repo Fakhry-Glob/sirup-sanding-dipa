@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SiRUP Sanding DIPA ↔ RUP & Revisi Massal
 // @namespace    https://github.com/Fakhry-Glob
-// @version      1.0.0
+// @version      1.0.1
 // @description  Sanding PDF DIPA SAKTI (RKK / FA Detail 16 Segmen) dengan PKKR dan RUP terumumkan di SiRUP pasca-putus integrasi SAKTI (31 Juli 2026): tambah cabang PKKR, klasifikasi pengadaan/non-pengadaan, revisi satu-ke-banyak massal dari layar rekap, umumkan, dan samakan Struktur Anggaran.
 // @author       Fakhry-Glob
 // @match        https://sirup.inaproc.id/sirup/*
@@ -13,7 +13,7 @@
 
 (function () {
 'use strict';
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 
 const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
@@ -819,15 +819,41 @@ const Sirup = (() => {
         return r;
     }
     const getText = async url => (await get(url)).text();
+    // SiRUP membalas simpan/umumkan dengan 302 ke "http://…" (bukan https). fetch() yang mengikuti
+    // redirect itu diblokir browser sebagai mixed content → "Failed to fetch", padahal server sudah
+    // memproses. Karena itu POST non-JSON memakai redirect:'manual' dan hasilnya diverifikasi terpisah.
     async function post(url, body, { json = false } = {}) {
-        const r = await fetch(url, {
-            method: 'POST', credentials: 'same-origin', redirect: 'follow',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', ...(json ? { 'X-Requested-With': 'XMLHttpRequest' } : {}) },
-            body: body instanceof URLSearchParams ? body.toString() : body,
-        });
-        if (!r.ok) throw new Error(`POST ${url} → HTTP ${r.status}`);
-        return json ? r.json() : r;
+        let r;
+        try {
+            r = await fetch(url, {
+                method: 'POST', credentials: 'same-origin', redirect: json ? 'follow' : 'manual',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', ...(json ? { 'X-Requested-With': 'XMLHttpRequest' } : {}) },
+                body: body instanceof URLSearchParams ? body.toString() : body,
+            });
+        } catch (e) { throw new Error(`POST ${url.replace(BASE, '')} gagal di jaringan/browser (${e.message}). Cek apakah sesi SiRUP masih login.`); }
+        if (json) {
+            if (!r.ok) throw new Error(`POST ${url} → HTTP ${r.status}`);
+            return r.json();
+        }
+        if (r.type === 'opaqueredirect' || (r.status >= 300 && r.status < 400)) return { redirected: true, status: 302, text: async () => '' };
+        if (!r.ok) throw new Error(`POST ${url.replace(BASE, '')} → HTTP ${r.status}`);
+        return { redirected: false, status: r.status, text: () => r.text() };
     }
+    // GET yang tidak mengikuti redirect (mis. kajiulangpaket → 302 ke form di http://)
+    async function getManual(url) {
+        try { return await fetch(url, { credentials: 'same-origin', redirect: 'manual' }); }
+        catch (e) { throw new Error(`GET ${url.replace(BASE, '')} gagal (${e.message}).`); }
+    }
+    // pesan flash SiRUP (kotak alert) pada halaman berikutnya — dipakai untuk membaca alasan penolakan
+    async function bacaFlash(url) {
+        try {
+            const h = await getText(url);
+            const d = new DOMParser().parseFromString(h, 'text/html');
+            return [...d.querySelectorAll('#alert, .alert-danger, .alert-warning, .alert-success, .alert-info')]
+                .map(e => e.textContent.replace(/\s+/g, ' ').trim()).filter(t => t && !/^×$/.test(t)).join(' | ');
+        } catch (e) { return ''; }
+    }
+
     async function dt(url, extra = '') {
         const sep = url.includes('?') ? '&' : '?';
         const t = await getText(`${url}${sep}sEcho=1&iColumns=12&iDisplayStart=0&iDisplayLength=2000&sSearch=${extra}`);
@@ -1024,7 +1050,12 @@ const Sirup = (() => {
         f.append('strukturAnggaranPusat.belanja_pengadaan_sosial', Math.round(val.sosial));
         f.append('strukturAnggaranPusat.belanja_pengadaan_hibah', Math.round(val.hibah));
         f.append('strukturAnggaranPusat.belanja_pengadaan_lainnya', Math.round(val.lainnya));
-        return post(`${BASE}/strukturanggaranctr/simpanstrukturanggaranpusat`, f);
+        const r = await post(`${BASE}/strukturanggaranctr/simpanstrukturanggaranpusat`, f);
+        if (!r.redirected) throw new Error('Struktur anggaran ditolak: ' + (await pesanError(r)));
+        const cek = await strukturAnggaran();
+        const beda = ['barjas', 'modal', 'sosial', 'hibah', 'lainnya'].filter(k => Math.abs(cek[k] - Math.round(val[k])) > 1);
+        if (beda.length) throw new Error('Struktur anggaran tidak berubah sesuai isian (' + beda.join(', ') + '). ' + (await bacaFlash(`${BASE}/strukturanggaranctr/strukturanggarannew`)));
+        return cek;
     }
 
     // ── Umumkan / batal ─────────────────────────────────────────────────
@@ -1032,16 +1063,30 @@ const Sirup = (() => {
         const f = new URLSearchParams();
         f.append('sData', ids.map(id => `${id}=on`).join('&'));
         f.append('penyediaAtauSwakelola', jenis);
-        return post(`${BASE}/rup/umumkan`, f);
+        const r = await post(`${BASE}/rup/umumkan`, f);
+        if (!r.redirected) throw new Error('SiRUP tidak menerima permintaan umumkan: ' + (await pesanError(r)));
+        return r;
     }
     async function batalFinalDraft(id, alasan, jenis = 'penyedia') {
         const f = new URLSearchParams({ alasan, idPaket: id, penyediaAtauSwakelola: jenis });
-        return post(`${BASE}/rup/submitbatalkanfinaldraft`, f);
+        const r = await post(`${BASE}/rup/submitbatalkanfinaldraft`, f);
+        if (!r.redirected) throw new Error(`Batal final draft ${id} ditolak: ` + (await pesanError(r)));
+        return r;
     }
     async function batalkanPaket(id, alasan, jenis = 'penyedia') {
-        await getText(`${BASE}/rup/kajiulangpaket?id=${id}&penyediaAtauSwakelola=${jenis}&jenisMtl=&jenis=batal`);
+        await getManual(`${BASE}/rup/kajiulangpaket?id=${id}&penyediaAtauSwakelola=${jenis}&jenisMtl=&jenis=batal`);
+        const form = await getText(`${BASE}/rup/formkajiulangbatal?penyediaAtauSwakelola=${jenis}&id=${id}`);
+        if (!/simpanrevisi/i.test(form)) throw new Error(`Form pembatalan paket ${id} tidak terbuka (paket mungkin bukan status Terumumkan).`);
         const f = new URLSearchParams({ alasan, id, penyediaAtauSwakelola: jenis });
-        return post(`${BASE}/revisictr/simpanrevisi${jenis}batal`, f);
+        const r = await post(`${BASE}/revisictr/simpanrevisi${jenis}batal`, f);
+        if (!r.redirected) throw new Error(`Pembatalan paket ${id} ditolak: ` + (await pesanError(r)));
+        return r;
+    }
+    async function pesanError(r) {
+        const body = await r.text();
+        const d = new DOMParser().parseFromString(body, 'text/html');
+        const t = [...d.querySelectorAll('.alert, .error, label.error')].map(e => e.textContent.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' | ');
+        return t || `HTTP ${r.status}, halaman tanpa pesan`;
     }
 
     // ── Revisi satu ke banyak ───────────────────────────────────────────
@@ -1155,33 +1200,27 @@ const Sirup = (() => {
         return f;
     }
 
-    async function bacaError(r) {
-        const body = await r.text();
-        const msg = (body.match(/class="alert[^"]*"[^>]*>([\s\S]*?)<\/div>/) || [])[1];
-        return msg ? msg.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '';
-    }
-
     // Trik KPA membuat paket tanpa akun PPK: revisi satu-ke-banyak atas paket existing.
     // Paket #1 = paket existing dibiarkan apa adanya; paket #2 dst. = paket baru.
     async function revisiSatuKeBanyak(ctx, donor, pakets, alasan, { onStep, dryRun } = {}) {
         const ours = pakets.map((pk, i) => payloadPaket(ctx, donor, pk, i + 1, i === pakets.length - 1, alasan));
         if (dryRun) return { payloads: ours.map((o, i) => gabungPayload(null, o, pakets[i])) };
         const before = new Set((await daftarPaket(ctx.tahun)).map(p => p.id));
-        const r0 = await get(`${BASE}/rup/kajiulangpaket?id=${donor.id}&penyediaAtauSwakelola=penyedia&jenisMtl=&jenis=satukebanyak`);
-        if (!/formkajiulangsatukebanyak/.test(r0.url)) throw new Error('SiRUP tidak membuka form revisi satu ke banyak (URL: ' + r0.url + ')');
-        let tpl = serializeForm(await r0.text());
-        if (!tpl) log('Form revisi tidak terbaca; payload disusun dari data paket.', 'w');
+        const formUrl = n => `${BASE}/revisictr/formkajiulangsatukebanyak?count=${n}&penyediaAtauSwakelola=penyedia&id=${donor.id}&ispecah=false`;
+        await getManual(`${BASE}/rup/kajiulangpaket?id=${donor.id}&penyediaAtauSwakelola=penyedia&jenisMtl=&jenis=satukebanyak`);
+        const h0 = await getText(formUrl(1));
+        let tpl = serializeForm(h0);
+        if (!tpl) throw new Error(`Form revisi satu ke banyak paket ${donor.id} tidak terbuka (paket mungkin bukan status Terumumkan).`);
         const terkirim = [];
         for (let i = 0; i < ours.length; i++) {
             const body = gabungPayload(tpl, ours[i], pakets[i]);
             terkirim.push(body);
             const r = await post(`${BASE}/revisictr/simpankajiulangonetomanypenyedia`, body);
-            const last = i === ours.length - 1;
-            if (!(last ? /\/rup\/penyedia/ : new RegExp(`count=${i + 2}`)).test(r.url)) {
-                const msg = await bacaError(r);
-                throw new Error(`Paket #${i + 1} ditolak SiRUP${msg ? ': ' + msg : ''} (URL ${r.url}). Paket #1–#${i} sudah tersimpan; cek daftar paket sebelum mengulang.`);
+            if (!r.redirected) throw new Error(`Paket #${i + 1} ditolak SiRUP: ${await pesanError(r)}. Paket #1–#${i} sudah tersimpan; cek daftar paket sebelum mengulang.`);
+            if (i < ours.length - 1) {
+                const h = await getText(formUrl(i + 2));
+                tpl = serializeForm(h) || tpl; // form berikutnya (count+1) jadi template
             }
-            if (!last) tpl = serializeForm(await r.text()) || tpl; // form berikutnya (count+1) jadi template
             if (onStep) onStep(i + 1, ours.length);
             await sleep(400);
         }
@@ -1197,16 +1236,13 @@ const Sirup = (() => {
         ours.delete('count'); ours.delete('isSelesai');
         if (dryRun) return { payloads: [gabungPayload(null, ours, pk)] };
         const before = new Set((await daftarPaket(ctx.tahun)).map(p => p.id));
-        const r0 = await get(`${BASE}/rup/kajiulangpaket?id=${paketAsal.id}&penyediaAtauSwakelola=penyedia&jenisMtl=&jenis=satukesatu`);
-        if (!/formkajiulangsatukesatu/.test(r0.url)) throw new Error('SiRUP tidak membuka form revisi satu ke satu (URL: ' + r0.url + ')');
-        const tpl = serializeForm(await r0.text());
+        await getManual(`${BASE}/rup/kajiulangpaket?id=${paketAsal.id}&penyediaAtauSwakelola=penyedia&jenisMtl=&jenis=satukesatu`);
+        const tpl = serializeForm(await getText(`${BASE}/revisictr/formkajiulangsatukesatu?penyediaAtauSwakelola=penyedia&id=${paketAsal.id}`));
+        if (!tpl) throw new Error(`Form revisi satu ke satu paket ${paketAsal.id} tidak terbuka (paket mungkin bukan status Terumumkan).`);
         const body = gabungPayload(tpl, ours, pk);
         body.delete('count'); body.delete('isSelesai');
         const r = await post(`${BASE}/revisictr/simpankajiulangonetoonepenyedia`, body);
-        if (!/\/rup\/penyedia/.test(r.url)) {
-            const msg = await bacaError(r);
-            throw new Error(`Revisi 1→1 paket ${paketAsal.id} ditolak SiRUP${msg ? ': ' + msg : ''} (URL ${r.url})`);
-        }
+        if (!r.redirected) throw new Error(`Revisi 1→1 paket ${paketAsal.id} ditolak SiRUP: ${await pesanError(r)}`);
         const after = await daftarPaket(ctx.tahun);
         const baru = after.filter(p => !before.has(p.id));
         return { baru, donorHilang: !after.some(p => p.id === paketAsal.id), terkirim: [body] };
@@ -1215,7 +1251,7 @@ const Sirup = (() => {
     return {
         context, crawlPkkr, tambahPkkr, cariNodeBaru, daftarPpk, daftarPaket, detailPaket, denorm, kabupaten, alasanUmkm,
         strukturAnggaran, simpanStrukturAnggaran, umumkan, batalFinalDraft, batalkanPaket, revisiSatuKeBanyak, revisiSatuKeSatu, payloadPaket, serializeForm, gabungPayload,
-        setLogger, JENIS_ID, METODE_ID, PROVINSI, isLoginPage, sleep,
+        bacaFlash, getManual, setLogger, JENIS_ID, METODE_ID, PROVINSI, isLoginPage, sleep,
     };
 })();
 
@@ -1463,9 +1499,14 @@ const UI = (() => {
             const parent = n.parentKey ? S.pkkr.get(n.parentKey) : null;
             if (n.parentKey && !parent) { log(`Lewati ${n.key}: induk ${n.parentKey} belum ada.`, 'e'); continue; }
             if (!n.nama) { log(`Lewati ${n.key}: nama kosong.`, 'e'); continue; }
-            await Sirup.tambahPkkr(S.ctx, n, parent && parent.id, idPpk);
+            const rs = await Sirup.tambahPkkr(S.ctx, n, parent && parent.id, idPpk);
             const id = await Sirup.cariNodeBaru(S.ctx, n.level, parent && parent.id, n.kode);
-            if (!id) throw new Error(`SiRUP tidak menyimpan ${n.key} (tidak ditemukan setelah simpan).`);
+            if (!id) {
+                const hal = { prog: 'index', keg: `indexKegiatan?idProgram=${parent && parent.id}`, kro: `indexOutput?idKegiatan=${parent && parent.id}`, ro: `indexSubOutput?idOutput=${parent && parent.id}`, komp: `indexKomponen?idSubOutput=${parent && parent.id}`, sub: `indexSubKomponen?idKomponen=${parent && parent.id}` }[n.level];
+                const flash = await Sirup.bacaFlash(`/sirup/programctr/${hal}`);
+                const isiHal = rs && !rs.redirected ? ' ' + (await rs.text()).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 200) : '';
+                throw new Error(`SiRUP tidak menyimpan ${n.key}${parent && !parent.manual ? ' (induknya node Integrasi — SiRUP mungkin menolak cabang Manual di bawah node Integrasi)' : ''}. ${flash ? 'Pesan SiRUP: ' + flash : 'Tidak ada pesan dari SiRUP.'}${isiHal}`);
+            }
             S.pkkr.set(n.key, { id, level: n.level, kode: n.kode, nama: n.nama, pagu: n.pagu, key: n.key, manual: true, parentId: parent && parent.id });
             log(`PKKR + ${n.key} (id ${id})`, 'o');
             await Sirup.sleep(S.cfg.jeda);

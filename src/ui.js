@@ -241,9 +241,14 @@ const UI = (() => {
             const parent = n.parentKey ? S.pkkr.get(n.parentKey) : null;
             if (n.parentKey && !parent) { log(`Lewati ${n.key}: induk ${n.parentKey} belum ada.`, 'e'); continue; }
             if (!n.nama) { log(`Lewati ${n.key}: nama kosong.`, 'e'); continue; }
-            await Sirup.tambahPkkr(S.ctx, n, parent && parent.id, idPpk);
+            const rs = await Sirup.tambahPkkr(S.ctx, n, parent && parent.id, idPpk);
             const id = await Sirup.cariNodeBaru(S.ctx, n.level, parent && parent.id, n.kode);
-            if (!id) throw new Error(`SiRUP tidak menyimpan ${n.key} (tidak ditemukan setelah simpan).`);
+            if (!id) {
+                const hal = { prog: 'index', keg: `indexKegiatan?idProgram=${parent && parent.id}`, kro: `indexOutput?idKegiatan=${parent && parent.id}`, ro: `indexSubOutput?idOutput=${parent && parent.id}`, komp: `indexKomponen?idSubOutput=${parent && parent.id}`, sub: `indexSubKomponen?idKomponen=${parent && parent.id}` }[n.level];
+                const flash = await Sirup.bacaFlash(`/sirup/programctr/${hal}`);
+                const isiHal = rs && !rs.redirected ? ' ' + (await rs.text()).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 200) : '';
+                throw new Error(`SiRUP tidak menyimpan ${n.key}${parent && !parent.manual ? ' (induknya node Integrasi — SiRUP mungkin menolak cabang Manual di bawah node Integrasi)' : ''}. ${flash ? 'Pesan SiRUP: ' + flash : 'Tidak ada pesan dari SiRUP.'}${isiHal}`);
+            }
             S.pkkr.set(n.key, { id, level: n.level, kode: n.kode, nama: n.nama, pagu: n.pagu, key: n.key, manual: true, parentId: parent && parent.id });
             log(`PKKR + ${n.key} (id ${id})`, 'o');
             await Sirup.sleep(S.cfg.jeda);
