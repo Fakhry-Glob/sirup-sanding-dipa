@@ -1191,7 +1191,7 @@ const Sirup = (() => {
     }
 
     // Revisi satu ke satu: satu POST ke simpankajiulangonetoonepenyedia (payload = 1→N tanpa count/isSelesai).
-    // Paket asal digantikan paket berkode baru yang langsung berstatus Terumumkan.
+    // Paket asal digantikan paket berkode baru berstatus Final Draft; KPA harus mengumumkannya lagi.
     async function revisiSatuKeSatu(ctx, paketAsal, pk, alasan, { dryRun } = {}) {
         const ours = payloadPaket(ctx, paketAsal, pk, 1, true, alasan);
         ours.delete('count'); ours.delete('isSelesai');
@@ -1657,7 +1657,7 @@ const UI = (() => {
             const wrap = h('div', {});
             for (const a of revisi) wrap.append(revisiCard(a));
             body.append(section(`Revisi paket (${revisi.length} revisi, ${revisi.reduce((s, a) => s + a.pakets.length, 0)} paket hasil)`,
-                'Setiap revisi memakai metode Satu ke Banyak: paket asal digantikan paket hasil, lalu paket hasil langsung diumumkan. Paket dengan catatan "melebihi pagu DIPA" tidak dicentang — putuskan dulu nilainya.', wrap));
+                'Koreksi satu paket memakai revisi Satu ke Satu; penambahan paket memakai Satu ke Banyak (paket #1 = paket existing). Keduanya menghasilkan paket berkode baru berstatus Final Draft, yang langsung diumumkan tool setelah revisi tersimpan. Paket dengan catatan "melebihi pagu DIPA" tidak dicentang — putuskan dulu nilainya.', wrap));
         }
         if (T('TANPA_DONOR').length) body.append(h('div', { class: 'errbox' }, `${T('TANPA_DONOR')[0].pakets.length} paket baru tidak punya paket donor (tidak ada paket terumumkan yang bersih). Minta PPK membuat satu paket, umumkan, lalu jalankan ulang.`));
 
@@ -1857,7 +1857,7 @@ const UI = (() => {
         const ok = await confirmBox('Jalankan aksi di SiRUP', `<ul>
             <li>Batalkan ${batal.length} paket terumumkan (non-pengadaan)</li>
             <li>Kembalikan ${batalFd.length} final draft ke PPK</li>
-            <li>${revisi.filter(a => a.metodeRevisi === 'satukesatu').length} revisi satu-ke-satu (hasil langsung terumumkan)</li>
+            <li>${revisi.filter(a => a.metodeRevisi === 'satukesatu').length} revisi satu-ke-satu → paket hasil (Final Draft) langsung diumumkan</li>
             <li>${revisi.filter(a => a.metodeRevisi !== 'satukesatu').length} revisi satu-ke-banyak → ${revisi.filter(a => a.metodeRevisi !== 'satukesatu').reduce((s, a) => s + a.pakets.length, 0)} paket hasil (Final Draft), langsung diumumkan</li>
             <li>Umumkan ${umumIds.length} final draft</li></ul>
             <p class="note">Semua langkah mengubah data SiRUP dan tercatat atas nama akun KPA ini. Proses berjalan berurutan; bila satu langkah gagal, proses berhenti dan rinciannya tampil di log.</p>`);
@@ -1871,8 +1871,11 @@ const UI = (() => {
             const r = satu ? await Sirup.revisiSatuKeSatu(S.ctx, a.donor, a.pakets[0], a.alasan)
                 : await Sirup.revisiSatuKeBanyak(S.ctx, a.donor, a.pakets, a.alasan, { onStep: (i, n) => log(`  simpan paket ${i}/${n}`) });
             log(`  ${r.baru.length} paket baru: ${r.baru.map(p => p.id).join(', ')}${r.donorHilang ? '' : ' — PERHATIAN: paket donor masih ada'}`, r.donorHilang ? 'o' : 'w');
+            // hasil revisi (1→1 maupun 1→N) berstatus Final Draft → umumkan
             const fd = r.baru.filter(p => p.status === '2').map(p => p.id);
             if (fd.length) { await Sirup.umumkan(fd); log(`  diumumkan: ${fd.join(', ')}`, 'o'); }
+            const aneh = r.baru.filter(p => !['2', '3'].includes(p.status));
+            if (aneh.length) log(`  PERHATIAN: paket hasil berstatus tak terduga: ${aneh.map(p => `${p.id} (${Analysis.ST[p.status] || p.status})`).join(', ')}`, 'w');
             a.pilih = false; a.selesai = true;
             await Sirup.sleep(S.cfg.jeda);
         }

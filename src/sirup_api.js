@@ -395,7 +395,7 @@ const Sirup = (() => {
     }
 
     // Revisi satu ke satu: satu POST ke simpankajiulangonetoonepenyedia (payload = 1→N tanpa count/isSelesai).
-    // Paket asal digantikan paket berkode baru yang langsung berstatus Terumumkan.
+    // Paket asal digantikan paket berkode baru berstatus Final Draft; KPA harus mengumumkannya lagi.
     async function revisiSatuKeSatu(ctx, paketAsal, pk, alasan, { dryRun } = {}) {
         const ours = payloadPaket(ctx, paketAsal, pk, 1, true, alasan);
         ours.delete('count'); ours.delete('isSelesai');
