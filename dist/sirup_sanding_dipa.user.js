@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SiRUP Sanding DIPA ↔ RUP & Revisi Massal
 // @namespace    https://github.com/Fakhry-Glob
-// @version      1.0.1
+// @version      1.1.0
 // @description  Sanding PDF DIPA SAKTI (RKK / FA Detail 16 Segmen) dengan PKKR dan RUP terumumkan di SiRUP pasca-putus integrasi SAKTI (31 Juli 2026): tambah cabang PKKR, klasifikasi pengadaan/non-pengadaan, revisi satu-ke-banyak massal dari layar rekap, umumkan, dan samakan Struktur Anggaran.
 // @author       Fakhry-Glob
 // @match        https://sirup.inaproc.id/sirup/*
@@ -13,7 +13,7 @@
 
 (function () {
 'use strict';
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.1.0';
 
 const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
@@ -849,8 +849,11 @@ const Sirup = (() => {
         try {
             const h = await getText(url);
             const d = new DOMParser().parseFromString(h, 'text/html');
-            return [...d.querySelectorAll('#alert, .alert-danger, .alert-warning, .alert-success, .alert-info')]
-                .map(e => e.textContent.replace(/\s+/g, ' ').trim()).filter(t => t && !/^×$/.test(t)).join(' | ');
+            // modal "Syarat dan Ketentuan" ada di setiap halaman → bukan pesan error
+            return [...d.querySelectorAll('#alert, .alert-danger, .alert-warning, .alert-success, .alert-info, label.error, span.error, .help-block')]
+                .filter(e => !e.closest('#popup, #overlay, .modal'))
+                .map(e => e.textContent.replace(/\s+/g, ' ').replace(/^×\s*/, '').trim())
+                .filter(t => t && !/Syarat dan Ketentuan|Kebijakan Privasi|Geser Ke Bawah/i.test(t)).join(' | ');
         } catch (e) { return ''; }
     }
 
@@ -914,7 +917,12 @@ const Sirup = (() => {
             for (const r of rows) {
                 const node = rowToNode(r, lvl, parent && parent.key);
                 node.parentId = parent ? parent.id : null;
-                map.set(node.key, node);
+                // Rantai PKKR Manual paralel (cara BPPP Tegal) memakai kode yang sama dengan node
+                // Integrasi. Map menyimpan node Integrasi sebagai utama dan salinan Manual di .manualTwin.
+                const ada = map.get(node.key);
+                if (!ada) map.set(node.key, node);
+                else if (ada.manual && !node.manual) { node.manualTwin = ada; map.set(node.key, node); }
+                else if (!ada.manualTwin) ada.manualTwin = node;
                 if (onProgress) onProgress(++n, node.key);
                 if (depth + 1 < PKKR_LV.length) await walk(depth + 1, node);
             }
@@ -961,9 +969,11 @@ const Sirup = (() => {
         const i = PKKR_LV.findIndex(l => l[0] === level);
         const [, ep, param] = PKKR_LV[i];
         const url = param ? `${BASE}/datatablectr/${ep}?tahun=${ctx.tahun}&${param}=${parentId}` : `${BASE}/datatablectr/${ep}`;
-        const rows = await dt(url);
-        const r = rows.find(x => String(x[2]).trim() === kode);
-        return r ? String(r[0]) : null;
+        const rows = (await dt(url)).filter(x => String(x[2]).trim() === kode);
+        if (!rows.length) return null;
+        const manual = rows.filter(x => { const c = x[x.length - 1]; return !c || c === 'N/A'; });
+        const pick = (manual.length ? manual : rows).sort((a, b) => Number(b[0]) - Number(a[0]))[0];
+        return String(pick[0]);
     }
     // daftar PPK diambil dari form sub komponen; idKomponen harus id nyata (0 → HTTP 500)
     async function daftarPpk(idKomponen) {
@@ -1469,10 +1479,10 @@ const UI = (() => {
                         h('td', { class: 'n' }, fmt(n.pagu)), h('td', { class: 'n' }, n.pengadaan ? fmt(n.pengadaan) : pill('non-pengadaan', 'p-np')));
                 });
                 box.append(h('h3', {}, 'Cabang baru di DIPA'),
-                    h('p', { class: 'note' }, 'Default: hanya cabang yang memuat belanja pengadaan yang dicentang (cabang gaji/non-pengadaan dilewati). Cabang ditambahkan sebagai PKKR Manual dari atas ke bawah.'),
+                    h('p', { class: 'note' }, 'Default: hanya cabang yang memuat belanja pengadaan yang dicentang (cabang gaji/non-pengadaan dilewati). SiRUP menolak cabang Manual di bawah node Integrasi, jadi cabang dibuat dalam rantai PKKR Manual paralel dari level Program (nama Program/Kegiatan diberi akhiran "(Manual)", kode tetap sama). Rincian node yang akan dibuat ditampilkan sebelum dijalankan.'),
                     h('div', { class: 'tbl' }, h('table', { class: 't' }, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Level'), h('th', {}, 'Kode'), h('th', {}, 'Uraian'), h('th', { class: 'n' }, 'Pagu DIPA'), h('th', { class: 'n' }, 'Pagu pengadaan'))), h('tbody', {}, rows))),
                     h('div', { class: 'row', style: { marginTop: '8px' } }, h('span', {}, 'Delegasikan ke PPK:'), ppkSel,
-                        h('button', { class: 'btn go', disabled: !S.ctx.isKPA, onclick: () => guard(() => runPkkr(diff.baru.filter(n => n.pilih), ppkSel.value)) }, 'Tambahkan cabang terpilih ke PKKR')));
+                        h('button', { class: 'btn go', disabled: !S.ctx.isKPA, onclick: () => guard(() => runPkkr(diff.baru, ppkSel.value)) }, 'Tambahkan cabang terpilih ke PKKR (rantai Manual)')));
             }
             if (diff.beda.length) box.append(h('details', { style: { marginTop: '12px' } }, h('summary', {}, `Pagu berbeda (${diff.beda.length}) — node integrasi terkunci, hanya informasi`),
                 h('div', { class: 'tbl' }, h('table', { class: 't' }, h('thead', {}, h('tr', {}, h('th', {}, 'Kode'), h('th', {}, 'Uraian'), h('th', { class: 'n' }, 'DIPA'), h('th', { class: 'n' }, 'SiRUP'), h('th', {}, 'Jenis'))),
@@ -1490,27 +1500,69 @@ const UI = (() => {
         log(`PKKR terbaca: ${S.pkkr.size} node.`, 'o');
         S.an = null;
     }
+    // Cara BPPP Tegal: SiRUP menolak cabang Manual di bawah node Integrasi (pagu integrasi beku di
+    // nilai lama). Cabang baru dibuat dalam rantai PKKR Manual paralel mulai dari Program, dengan kode
+    // sama (MAK paket tetap identik) dan pagu tiap salinan = jumlah pagu cabang baru di bawahnya.
+    function rencanaManual(nodes) {
+        const pilih = nodes.filter(n => n.pilih);
+        const keys = new Set(pilih.map(n => n.key));
+        const LVN = ['prog', 'keg', 'kro', 'ro', 'komp', 'sub'];
+        const plan = new Map();
+        // puncak cabang baru: node terpilih yang induknya tidak ikut dipilih
+        const puncak = pilih.filter(n => !keys.has(n.parentKey));
+        for (const top of puncak) {
+            const parts = top.key.split('.');
+            for (let i = 1; i < parts.length; i++) {
+                const k = parts.slice(0, i).join('.');
+                const ada = S.pkkr.get(k);
+                const sudahManual = ada && (ada.manual || ada.manualTwin);
+                if (sudahManual) continue;                       // rantai Manual sudah ada di level ini
+                const d = S.dipa.nodes.get(k) || {};
+                const x = plan.get(k) || { key: k, level: LVN[i - 1], kode: parts[i - 1], parentKey: parts.slice(0, i - 1).join('.'),
+                    nama: ((ada && ada.nama) || d.uraian || '').replace(/\s*\(Manual\)$/, '') + (i <= 2 ? ' (Manual)' : ''), pagu: 0, salinan: true };
+                x.pagu += top.pagu || 0;
+                plan.set(k, x);
+            }
+        }
+        for (const n of pilih) plan.set(n.key, { ...n, salinan: false });
+        return [...plan.values()].sort((a, b) => a.key.split('.').length - b.key.split('.').length || a.key.localeCompare(b.key));
+    }
+    // id induk di rantai Manual (salinan terbaru), atau node Manual yang sudah ada
+    function indukManual(key) {
+        const n = key && S.pkkr.get(key);
+        if (!n) return null;
+        if (n.manual) return n;
+        return n.manualTwin || null;
+    }
     async function runPkkr(nodes, idPpk) {
-        if (!nodes.length) return;
-        const ok = await confirmBox('Tambah cabang PKKR', `<p>${nodes.length} node akan ditambahkan sebagai PKKR <b>Manual</b>:</p><div class="tbl"><table class="t">${nodes.map(n => `<tr><td class="mono">${esc(n.key)}</td><td>${esc(n.nama)}</td><td class="n">${fmt(n.pagu)}</td></tr>`).join('')}</table></div><p class="note">Tindakan ini mengubah data SiRUP. Tidak ada tombol hapus otomatis — hapus manual lewat Kelola PKKR bila salah.</p>`);
+        const rencana = rencanaManual(nodes);
+        if (!rencana.length) return;
+        const lv = { prog: 'Program', keg: 'Kegiatan', kro: 'KRO', ro: 'RO', komp: 'Komponen', sub: 'Sub Komponen' };
+        const ok = await confirmBox('Tambah cabang PKKR (rantai Manual paralel)', `<p>SiRUP menolak cabang Manual di bawah node Integrasi, jadi cabang baru dibuat di <b>rantai PKKR Manual paralel</b> mulai dari Program (cara BPPP Tegal). Kode sama dengan DIPA, sehingga MAK paket tetap sama.</p>
+            <div class="tbl"><table class="t"><tr><th>Level</th><th>Kode</th><th>Nama</th><th class="n">Pagu</th><th></th></tr>${rencana.map(n => `<tr><td>${lv[n.level]}</td><td class="mono">${esc(n.key)}</td><td>${esc(n.nama)}</td><td class="n">${fmt(n.pagu)}</td><td>${n.salinan ? '<span class="pill p-info">salinan induk</span>' : '<span class="pill p-ok">cabang baru</span>'}</td></tr>`).join('')}</table></div>
+            <p class="note">${rencana.length} node akan dibuat. Tindakan ini mengubah data SiRUP; hapus manual lewat Kelola PKKR bila salah.</p>`);
         if (!ok) return;
-        for (const n of nodes) {
+        for (const n of rencana) {
             if (S.stop) break;
-            const parent = n.parentKey ? S.pkkr.get(n.parentKey) : null;
-            if (n.parentKey && !parent) { log(`Lewati ${n.key}: induk ${n.parentKey} belum ada.`, 'e'); continue; }
-            if (!n.nama) { log(`Lewati ${n.key}: nama kosong.`, 'e'); continue; }
+            const parent = n.level === 'prog' ? null : indukManual(n.parentKey);
+            if (n.level !== 'prog' && !parent) throw new Error(`Induk Manual ${n.parentKey} belum ada — proses dihentikan.`);
+            if (!n.nama) throw new Error(`Nama ${n.key} kosong — isi dulu di tabel.`);
             const rs = await Sirup.tambahPkkr(S.ctx, n, parent && parent.id, idPpk);
             const id = await Sirup.cariNodeBaru(S.ctx, n.level, parent && parent.id, n.kode);
-            if (!id) {
-                const hal = { prog: 'index', keg: `indexKegiatan?idProgram=${parent && parent.id}`, kro: `indexOutput?idKegiatan=${parent && parent.id}`, ro: `indexSubOutput?idOutput=${parent && parent.id}`, komp: `indexKomponen?idSubOutput=${parent && parent.id}`, sub: `indexSubKomponen?idKomponen=${parent && parent.id}` }[n.level];
-                const flash = await Sirup.bacaFlash(`/sirup/programctr/${hal}`);
+            const lama = S.pkkr.get(n.key);
+            if (!id || (lama && !lama.manual && lama.id === id) || (lama && lama.manualTwin && lama.manualTwin.id === id && n.salinan === false)) {
+                const form = { prog: 'formprogram', keg: `formkegiatan?idProgram=${parent && parent.id}`, kro: `formoutput?idKegiatan=${parent && parent.id}`, ro: `formsuboutput?idOutput=${parent && parent.id}`, komp: `formkomponen?idSubOutput=${parent && parent.id}`, sub: `formsubkomponen?idKomponen=${parent && parent.id}` }[n.level];
+                const flash = await Sirup.bacaFlash(`/sirup/programctr/${form}`);
                 const isiHal = rs && !rs.redirected ? ' ' + (await rs.text()).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 200) : '';
-                throw new Error(`SiRUP tidak menyimpan ${n.key}${parent && !parent.manual ? ' (induknya node Integrasi — SiRUP mungkin menolak cabang Manual di bawah node Integrasi)' : ''}. ${flash ? 'Pesan SiRUP: ' + flash : 'Tidak ada pesan dari SiRUP.'}${isiHal}`);
+                throw new Error(`SiRUP tidak menyimpan ${lv[n.level]} ${n.key}${parent ? ` di bawah ${parent.key} (id ${parent.id})` : ''}. ${flash ? 'Pesan SiRUP: ' + flash : 'SiRUP tidak memberi pesan.'}${isiHal}`);
             }
-            S.pkkr.set(n.key, { id, level: n.level, kode: n.kode, nama: n.nama, pagu: n.pagu, key: n.key, manual: true, parentId: parent && parent.id });
-            log(`PKKR + ${n.key} (id ${id})`, 'o');
+            const node = { id, level: n.level, kode: n.kode, nama: n.nama, pagu: n.pagu, key: n.key, manual: true, parentId: parent && parent.id };
+            if (lama && !lama.manual) lama.manualTwin = node; else S.pkkr.set(n.key, node);
+            log(`PKKR Manual + ${lv[n.level]} ${n.key} (id ${id})`, 'o');
             await Sirup.sleep(S.cfg.jeda);
         }
+        log('Rantai PKKR Manual selesai. Membaca ulang PKKR…', 'o');
+        await loadPkkr(true);
         S.an = null;
         go(1);
     }
@@ -1652,9 +1704,13 @@ const UI = (() => {
         }
     }
     function komponenId(mak) {
-        const k = mak.split('.').slice(0, 5).join('.');
-        const n = S.pkkr && S.pkkr.get(k);
-        return n ? n.id : null;
+        if (!S.pkkr) return null;
+        const parts = mak.split('.');
+        // sub-komponen ada di PKKR → komponen induknya (Integrasi atau rantai Manual)
+        const sub = S.pkkr.get(parts.slice(0, 6).join('.'));
+        if (sub && sub.parentId) return sub.parentId;
+        const k = S.pkkr.get(parts.slice(0, 5).join('.'));
+        return k ? ((k.manualTwin && k.manualTwin.id) || k.id) : null;
     }
 
     function stepRekap() {

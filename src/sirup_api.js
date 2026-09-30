@@ -53,8 +53,11 @@ const Sirup = (() => {
         try {
             const h = await getText(url);
             const d = new DOMParser().parseFromString(h, 'text/html');
-            return [...d.querySelectorAll('#alert, .alert-danger, .alert-warning, .alert-success, .alert-info')]
-                .map(e => e.textContent.replace(/\s+/g, ' ').trim()).filter(t => t && !/^×$/.test(t)).join(' | ');
+            // modal "Syarat dan Ketentuan" ada di setiap halaman → bukan pesan error
+            return [...d.querySelectorAll('#alert, .alert-danger, .alert-warning, .alert-success, .alert-info, label.error, span.error, .help-block')]
+                .filter(e => !e.closest('#popup, #overlay, .modal'))
+                .map(e => e.textContent.replace(/\s+/g, ' ').replace(/^×\s*/, '').trim())
+                .filter(t => t && !/Syarat dan Ketentuan|Kebijakan Privasi|Geser Ke Bawah/i.test(t)).join(' | ');
         } catch (e) { return ''; }
     }
 
@@ -118,7 +121,12 @@ const Sirup = (() => {
             for (const r of rows) {
                 const node = rowToNode(r, lvl, parent && parent.key);
                 node.parentId = parent ? parent.id : null;
-                map.set(node.key, node);
+                // Rantai PKKR Manual paralel (cara BPPP Tegal) memakai kode yang sama dengan node
+                // Integrasi. Map menyimpan node Integrasi sebagai utama dan salinan Manual di .manualTwin.
+                const ada = map.get(node.key);
+                if (!ada) map.set(node.key, node);
+                else if (ada.manual && !node.manual) { node.manualTwin = ada; map.set(node.key, node); }
+                else if (!ada.manualTwin) ada.manualTwin = node;
                 if (onProgress) onProgress(++n, node.key);
                 if (depth + 1 < PKKR_LV.length) await walk(depth + 1, node);
             }
@@ -165,9 +173,11 @@ const Sirup = (() => {
         const i = PKKR_LV.findIndex(l => l[0] === level);
         const [, ep, param] = PKKR_LV[i];
         const url = param ? `${BASE}/datatablectr/${ep}?tahun=${ctx.tahun}&${param}=${parentId}` : `${BASE}/datatablectr/${ep}`;
-        const rows = await dt(url);
-        const r = rows.find(x => String(x[2]).trim() === kode);
-        return r ? String(r[0]) : null;
+        const rows = (await dt(url)).filter(x => String(x[2]).trim() === kode);
+        if (!rows.length) return null;
+        const manual = rows.filter(x => { const c = x[x.length - 1]; return !c || c === 'N/A'; });
+        const pick = (manual.length ? manual : rows).sort((a, b) => Number(b[0]) - Number(a[0]))[0];
+        return String(pick[0]);
     }
     // daftar PPK diambil dari form sub komponen; idKomponen harus id nyata (0 → HTTP 500)
     async function daftarPpk(idKomponen) {
