@@ -212,7 +212,7 @@ const Sirup = (() => {
             id: (h.match(/name="strukturAnggaranPusat\.id" value="(\d+)"/) || [])[1] || '',
             idSatker: (h.match(/name="strukturAnggaranPusat\.id_satker"\s*value="(\d+)"/) || [])[1] || '',
             barjas: v('belanja_barjas'), modal: v('belanja_modal'), sosial: v('belanja_pengadaan_sosial'), hibah: v('belanja_pengadaan_hibah'), lainnya: v('belanja_pengadaan_lainnya'),
-            diperbarui: (h.match(/terakhir diperbarui pada tanggal ([^.<]+)/) || [])[1] || '',
+            diperbarui: (h.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').match(/diperbarui pada tanggal\s*([\d-]+\s*[\d:]*)/i) || [])[1] || '',
         };
     }
     async function simpanStrukturAnggaran(sa, val, tahun) {

@@ -8,16 +8,16 @@ const Classify = (() => {
     const RE = {
         pjlp: /\bpjlp\b|jasa lainnya perorangan|penyedia jasa (lainnya )?perorangan|cleaning ?service|tenaga (kebersihan|keamanan|satpam|pramubakti|pengemudi|teknisi)|\bsatpam\b|satuan pengaman|pramubakti|outsourc/i,
         bpjs: /\bbpjs\b|iuran jaminan|jaminan (kesehatan|kecelakaan|kematian|hari tua|pensiun|sosial)|\bjkk\b|\bjkm\b|\bjht\b/i,
-        ppnpn: /ppnpn|pegawai pemerintah non pegawai negeri|pegawai non asn|tenaga honorer/i,
+        ppnpn: /ppnpn|pppn|pegawai pemerintah non pegawai negeri|pegawai non asn|tenaga honorer|paruh waktu|tenaga kontrak|\bthr\b|tunjangan hari raya/i,
         honor: /honor|insentif|narasumber|narsum|pembahas|moderator|rohaniawan|\btunjangan\b|uang lembur|\blembur\b/i,
         uang: /uang (saku|harian|representasi|transport|makan (pns|pppk|lembur))|transport(asi)? lokal|lumpsum|lump sum|biaya transport(asi)? (peserta|narasumber)/i,
         pungutan: /\bpajak\b|\bpbb\b|\bstnk\b|retribusi|bea (materai|meterai)|biaya tol|\btol\b|e-?toll|\bparkir\b|biaya administrasi bank/i,
         natura: /makan (taruna|siswa|peserta didik|mahasiswa|kadet)|konsumsi (taruna|siswa|peserta didik)|ransum|(seragam|pakaian( dinas)?|perlengkapan) (taruna|siswa|peserta didik)/i,
         bantuan: /beasiswa|biaya pendidikan|\bspp\b|uang kuliah|tugas belajar|izin belajar|bantuan (pemerintah|biaya|uang|dana|sosial|langsung)|\bbanpem\b|hadiah (uang|lomba)/i,
         // paket meeting luar/dalam kota: penginapan hotel & ruang rapat direalisasikan sebagai pengadaan (metode Dikecualikan)
-        meeting: /paket meeting|full ?board|full ?day|half ?day|fullboard|fullday|halfday|sewa (ruang|gedung|hall|aula)|ruang (rapat|pertemuan)|akomodasi|penginapan|hotel|kamar|paket (kegiatan|pertemuan)/i,
+        meeting: /paket meeting|full ?board|full ?day|half ?day|fullboard|fullday|halfday|sewa (ruang|gedung|hall|aula)|ruang (rapat|pertemuan)|akomodasi|penginapan|\bhotel\b|\bkamar\b|paket (kegiatan|pertemuan)/i,
         // komponen khas EO: bila ada di RAB, paket diperlakukan sebagai jasa EO (bukan dikecualikan)
-        eo: /hiburan|mc|master of ceremony|pembawa acara|dekorasi|sound ?system|dokumentasi|event organi[sz]er|eo|panggung|lighting|backdrop/i,
+        eo: /hiburan|\bmc\b|master of ceremony|pembawa acara|dekorasi|sound ?system|dokumentasi|event organi[sz]er|\beo\b|panggung|lighting|backdrop/i,
         konsultan: /konsultan|pengawas(an)?\b|perencana(an)?\b|manajemen konstruksi|\bded\b|desain|kajian teknis|supervisi/i,
         pengelolaan: /pengelolaan kegiatan|manajemen proyek|biaya umum/i,
     };

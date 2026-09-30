@@ -13,7 +13,7 @@ const UI = (() => {
         step: 0, ctx: null, dipa: null, dipaFile: '', overrides: {}, pkkr: null, ppk: [], pakets: null, swakelola: [],
         an: null, plan: null, sa: null, busy: false, stop: false,
         cfg: Object.assign({
-            plBarjas: 200e6, plKonstruksi: 400e6, plKonsultansi: 100e6, metodeEO: 'Tender', minPaketBaru: 1000, maxPaketPerRevisi: 15,
+            plBarjas: 200e6, plKonstruksi: 400e6, plKonsultansi: 100e6, metodeEO: 'Tender', cekSebagai: 'CEK', minPaketBaru: 1000, maxPaketPerRevisi: 15,
             jadwalDefault: { awalPengadaan: nowYM(1), akhirPengadaan: nowYM(1), awalPekerjaan: nowYM(1), akhirPekerjaan: `${new Date().getFullYear()}-12`, awalKebutuhan: nowYM(1), kebutuhan: `${new Date().getFullYear()}-12` },
             jeda: 500,
         }, store.get('cfg', {})),
@@ -255,7 +255,7 @@ const UI = (() => {
     // ── 3. Sanding ─────────────────────────────────────────────────────
     function ensureAnalysis() {
         if (S.an) return;
-        const { nodes, akun } = Analysis.buildDipa(S.dipa, S.overrides);
+        const { nodes, akun } = Analysis.buildDipa(S.dipa, S.overrides, { cekSebagai: S.cfg.cekSebagai });
         S.an = { nodes, akun, orphans: [] };
         if (S.pakets) {
             const r = Analysis.sanding(akun, S.pakets);
@@ -372,7 +372,12 @@ const UI = (() => {
                     pk.spp = donor.spp; pk.volume = donor.volume;
                     pk.jadwal = { awalPengadaan: donor.tanggal.awalPengadaan, akhirPengadaan: donor.tanggal.akhirPengadaan, awalPekerjaan: donor.tanggal.awalPekerjaan, akhirPekerjaan: donor.tanggal.akhirPekerjaan,
                         awalKebutuhan: Analysis.ym(donor.pemanfaatan && donor.pemanfaatan.mulai) || donor.tanggal.awalPekerjaan, kebutuhan: Analysis.ym(donor.pemanfaatan && donor.pemanfaatan.akhir) || donor.tanggal.akhirPekerjaan };
-                    for (const a of pk.anggaran) { const old = donor.sumberDana.find(s => s.mak === a.mak); if (old) { a.idLama = old.id; a.sumber = old.sumber; a.danaApbn = old.danaApbn; } }
+                    const used = new Set();
+                    for (const a of pk.anggaran) {
+                        const old = donor.sumberDana.find(s => s.mak === a.mak && !used.has(s.id));
+                        if (old && !a.dari) { a.idLama = old.id; used.add(old.id); a.sumber = old.sumber; a.danaApbn = a.danaApbn || old.danaApbn; }
+                        else a.idLama = '';
+                    }
                 } else {
                     pk.lokasiRaw = pk.lokasiRaw || donorLok.map(l => ({ ...l }));
                     pk.jadwal = Object.assign({}, S.cfg.jadwalDefault, pk.jadwal || {});
@@ -697,6 +702,7 @@ const UI = (() => {
         await modal('Pengaturan', h('div', { class: 'grid2' },
             num('plBarjas', 'Batas PL barang/jasa lainnya (Rp)'), num('plKonstruksi', 'Batas PL konstruksi (Rp)'), num('plKonsultansi', 'Batas PL konsultansi (Rp)'),
             (() => { const sl = h('select', {}, ...['Tender', 'Seleksi', 'Tender Cepat', 'E-Purchasing'].map(m => h('option', { selected: c.metodeEO === m }, m))); sl.addEventListener('change', () => { c.metodeEO = sl.value; }); return h('div', {}, h('label', {}, 'Metode paket EO di atas batas PL'), sl); })(),
+            (() => { const sl = h('select', {}, h('option', { value: 'CEK', selected: c.cekSebagai !== 'P' }, 'Tidak dihitung (hanya ditandai)'), h('option', { value: 'P', selected: c.cekSebagai === 'P' }, 'Dihitung sebagai pengadaan')); sl.addEventListener('change', () => { c.cekSebagai = sl.value; }); return h('div', {}, h('label', {}, "Item 'Perlu cek' (mis. makan/seragam taruna via katering)"), sl); })(),
             num('minPaketBaru', 'Selisih minimum untuk usul paket baru (Rp)'), num('maxPaketPerRevisi', 'Maks. paket baru per revisi'), num('jeda', 'Jeda antar-permintaan (ms)'),
             mon('awalPengadaan', 'Default awal pemilihan'), mon('akhirPengadaan', 'Default akhir pemilihan'), mon('awalPekerjaan', 'Default awal kontrak'), mon('akhirPekerjaan', 'Default akhir kontrak'),
             mon('awalKebutuhan', 'Default awal pemanfaatan'), mon('kebutuhan', 'Default akhir pemanfaatan')), [['Simpan', true, 'pri']]);

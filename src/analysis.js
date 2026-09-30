@@ -14,7 +14,8 @@ const Analysis = (() => {
     const SD_CODE = { RM: 'A', PLN: 'B', PNP: 'D', PNBP: 'D', BLU: 'F', SBSN: 'T' };
 
     // ── 1. DIPA per akun, dengan klasifikasi per item ────────────────────
-    function buildDipa(dipa, overrides) {
+    function buildDipa(dipa, overrides, opts) {
+        const cekSebagaiP = opts && opts.cekSebagai === 'P';
         const nodes = dipa.nodes instanceof Map ? dipa.nodes : new Map(dipa.nodes.map(n => [n.key, n]));
         const akun = new Map();
         dipa.items.forEach((it, idx) => {
@@ -24,6 +25,7 @@ const Analysis = (() => {
             let c = Classify.item(code, node.uraian, it.uraian, it.grup);
             const ov = overrides && overrides[iid];
             if (ov) c = { kelas: ov, alasan: 'Diubah manual', manual: true };
+            else if (cekSebagaiP && c.kelas === 'CEK') c = { kelas: 'P', alasan: '(perlu cek → dihitung pengadaan) ' + c.alasan };
             let a = akun.get(it.key);
             if (!a) {
                 a = { key: it.key, akun: code, nama: node.uraian || '', pagu: 0, P: 0, NP: 0, CEK: 0, items: [], rup: [], sd: node.sd || [] };
@@ -102,11 +104,15 @@ const Analysis = (() => {
     // ── 4. Verdict per paket ────────────────────────────────────────────
     function verdictPaket(p, akunMap) {
         const rows = (p.sumberDana || []).map(sd => {
+            const base = { mak: sd.mak, pagu: sd.pagu, danaApbn: sd.danaApbn, idLama: sd.id };
             const a = akunMap.get(sd.mak);
-            if (!a) return { mak: sd.mak, pagu: sd.pagu, v: 'MAK_HILANG' };
-            if (a.target === 0 && !a.CEK) return { mak: sd.mak, pagu: sd.pagu, v: 'NON_PENGADAAN', alasan: [...new Set(a.items.filter(i => i.kelas === 'NP').map(i => i.alasan))].join('; ') };
-            if (a.status === 'LEBIH') return { mak: sd.mak, pagu: sd.pagu, v: 'LEBIH', selisih: a.selisih };
-            return { mak: sd.mak, pagu: sd.pagu, v: 'OK' };
+            if (!a) return { ...base, v: 'MAK_HILANG' };
+            if (a.target === 0 && !a.CEK) return { ...base, v: 'NON_PENGADAAN', alasan: [...new Set(a.items.filter(i => i.kelas === 'NP').map(i => i.alasan))].join('; ') };
+            // sumber dana paket harus salah satu SD akun di DIPA (hanya bisa dicek bila RKK diunggah)
+            const danaDipa = (a.sd || []).map(x => SD_CODE[x]).filter(Boolean);
+            const danaBeda = sd.danaApbn && danaDipa.length && !danaDipa.includes(sd.danaApbn) ? danaDipa[0] : null;
+            if (a.status === 'LEBIH') return { ...base, v: 'LEBIH', selisih: a.selisih, danaBeda };
+            return { ...base, v: danaBeda ? 'DANA_BEDA' : 'OK', danaBeda };
         });
         const all = v => rows.length && rows.every(r => r.v === v);
         const any = v => rows.some(r => r.v === v);
@@ -115,7 +121,8 @@ const Analysis = (() => {
         else if (all('NON_PENGADAAN')) verdict = 'BATAL';
         else if (any('MAK_HILANG')) verdict = 'REVISI_MAK';
         else if (any('NON_PENGADAAN')) verdict = 'REVISI_KELUARKAN_NP';
-        else if (any('LEBIH')) verdict = 'CEK_LEBIH';
+        else if (any('LEBIH')) verdict = 'REVISI_LEBIH';
+        else if (any('DANA_BEDA')) verdict = 'REVISI_DANA';
         if (p.status === '2' && verdict === 'OK') verdict = 'UMUMKAN';
         return { rows, verdict };
     }
@@ -152,38 +159,77 @@ const Analysis = (() => {
                 alasan: 'Belanja non-pengadaan: ' + (p.rows.map(r => r.alasan).filter(Boolean)[0] || '') });
 
         // c. final draft bermasalah: hanya ditandai (bisa dikembalikan ke PPK)
-        for (const p of pakets.filter(p => p.status === '2' && !['OK', 'UMUMKAN'].includes(p.verdict)))
+        // (paket FD yang MAK+pagu-nya sama persis dengan paket terumumkan = kemungkinan ganda)
+        const umumByMak = new Map();
+        for (const q of pakets.filter(q => q.status === '3')) for (const sd of q.sumberDana || []) umumByMak.set(`${sd.mak}|${Math.round(sd.pagu / 1e5)}`, q);
+        const ALASAN_FD = { BATAL: 'Belanja non-pengadaan', REVISI_MAK: 'MAK tidak ada di DIPA revisi terakhir', REVISI_KELUARKAN_NP: 'Memuat akun non-pengadaan',
+            REVISI_LEBIH: 'Akun sudah penuh terumumkan — mengumumkan paket ini membuat RUP melebihi pagu', REVISI_DANA: 'Sumber dana tidak sesuai DIPA' };
+        for (const p of pakets.filter(p => p.status === '2' && !['OK', 'UMUMKAN'].includes(p.verdict))) {
+            const twin = (p.sumberDana || []).map(sd => umumByMak.get(`${sd.mak}|${Math.round(sd.pagu / 1e5)}`)).find(Boolean);
             actions.push({ type: 'BATAL_FD', paketId: p.id, nama: p.nama, pagu: p.pagu, pilih: false, verdict: p.verdict,
-                alasan: p.verdict === 'BATAL' ? 'Belanja non-pengadaan' : 'MAK tidak sesuai DIPA revisi terakhir' });
+                alasan: (ALASAN_FD[p.verdict] || 'Perlu dicek') + (twin ? ` · kemungkinan ganda dengan paket terumumkan ${twin.id} (${twin.nama.slice(0, 40)})` : '') });
+        }
 
-        // d. revisi paket terumumkan yang MAK-nya hilang / memuat akun NP
-        for (const p of pakets.filter(p => ['REVISI_MAK', 'REVISI_KELUARKAN_NP'].includes(p.verdict) && p.status === '3')) {
+        // d. revisi paket terumumkan: MAK hilang, akun NP, RUP melebihi pagu akun, dana beda.
+        //    Kelebihan di satu akun dipindah ke akun berkode sama di kegiatan yang sama yang
+        //    masih kurang (kasus subkomponen dirombak saat revisi DIPA); sisanya dikurangi.
+        const lebihSisa = new Map([...akunMap.values()].filter(a => a.status === 'LEBIH').map(a => [a.key, a.rupU - a.P]));
+        const JENIS_REV = ['REVISI_MAK', 'REVISI_KELUARKAN_NP', 'REVISI_LEBIH', 'REVISI_DANA'];
+        const kandidat = pakets.filter(p => JENIS_REV.includes(p.verdict) && p.status === '3').sort((x, y) => y.pagu - x.pagu);
+        for (const p of kandidat) {
             const anggaran = [], catatan = [];
+            let perluKeputusan = false;
+            const push = row => {
+                const same = anggaran.find(x => x.mak === row.mak && x.danaApbn === row.danaApbn && !x.lebih && !row.lebih);
+                if (same) same.pagu += row.pagu; else anggaran.push(row);
+            };
             for (const r of p.rows) {
                 if (!r.pagu) continue;
+                const dana = r.danaBeda || r.danaApbn || 'A';
+                if (r.danaBeda) catatan.push(`${r.mak}: sumber dana ${r.danaApbn} → ${r.danaBeda} (sesuai DIPA)`);
                 if (r.v === 'NON_PENGADAAN') { catatan.push(`Baris ${r.mak} (Rp${fmt(r.pagu)}) dikeluarkan: ${r.alasan}`); continue; }
-                if (r.v !== 'MAK_HILANG') { anggaran.push({ mak: r.mak, pagu: r.pagu }); continue; }
-                const cands = saranPindahMak(r, akunMap, sisa);
-                const tgt = cands[0];
-                if (!tgt) { catatan.push(`Baris ${r.mak} (Rp${fmt(r.pagu)}) tidak punya padanan di DIPA — dihapus`); continue; }
-                const s = sisa.get(tgt.key) || 0;
-                const lebih = Math.max(0, r.pagu - s);
-                sisa.set(tgt.key, Math.max(0, s - r.pagu));
-                const row = { mak: tgt.key, pagu: r.pagu, dari: r.mak, kandidat: cands.slice(0, 6) };
-                if (lebih > TOL) {
-                    row.lebih = lebih;
-                    catatan.push(`${tgt.key}: melebihi sisa pagu DIPA Rp${fmt(lebih)} (cek tahun jamak / nilai kontrak)`);
+                if (r.v === 'MAK_HILANG') {
+                    const cands = saranPindahMak(r, akunMap, sisa);
+                    const tgt = cands[0];
+                    if (!tgt) { catatan.push(`Baris ${r.mak} (Rp${fmt(r.pagu)}) tidak punya padanan di DIPA — dihapus`); continue; }
+                    const s = sisa.get(tgt.key) || 0;
+                    const lebih = Math.max(0, r.pagu - s);
+                    sisa.set(tgt.key, Math.max(0, s - r.pagu));
+                    const row = { mak: tgt.key, pagu: r.pagu, dari: r.mak, kandidat: cands.slice(0, 6), danaApbn: dana };
+                    if (lebih > TOL) { row.lebih = lebih; perluKeputusan = true; catatan.push(`${tgt.key}: melebihi sisa pagu DIPA Rp${fmt(lebih)} (cek tahun jamak / nilai kontrak)`); }
+                    push(row);
+                    continue;
                 }
-                const same = anggaran.find(x => x.mak === row.mak && !x.lebih && !row.lebih);
-                if (same) same.pagu += row.pagu; else anggaran.push(row);
+                if (r.v === 'LEBIH') {
+                    const ex = lebihSisa.get(r.mak) || 0;
+                    const mv = Math.min(r.pagu, ex);
+                    if (mv <= TOL) { push({ mak: r.mak, pagu: r.pagu, danaApbn: dana, idLama: r.idLama }); continue; }
+                    lebihSisa.set(r.mak, ex - mv);
+                    if (r.pagu - mv > TOL) push({ mak: r.mak, pagu: r.pagu - mv, danaApbn: dana, idLama: r.idLama });
+                    const cands = saranPindahMak(r, akunMap, sisa).filter(c => c.key !== r.mak && c.sisa > TOL);
+                    let rest = mv;
+                    if (cands[0]) {
+                        const amt = Math.min(mv, cands[0].sisa);
+                        sisa.set(cands[0].key, cands[0].sisa - amt);
+                        push({ mak: cands[0].key, pagu: amt, dari: r.mak, kandidat: cands.slice(0, 6), danaApbn: dana });
+                        catatan.push(`Kelebihan ${r.mak} Rp${fmt(amt)} dipindah ke ${cands[0].key} (akun sama, masih kurang terumumkan)`);
+                        rest -= amt;
+                    }
+                    if (rest > TOL) { perluKeputusan = true; catatan.push(`${r.mak}: pagu paket dikurangi Rp${fmt(rest)} agar tidak melebihi pagu pengadaan DIPA`); }
+                    continue;
+                }
+                push({ mak: r.mak, pagu: r.pagu, danaApbn: dana, idLama: r.idLama });
             }
-            const alasan = p.verdict === 'REVISI_MAK' ? 'Penyesuaian MAK dengan DIPA revisi terakhir' : 'Mengeluarkan akun non-pengadaan';
+            const alasan = { REVISI_MAK: 'Penyesuaian MAK dengan DIPA revisi terakhir', REVISI_KELUARKAN_NP: 'Mengeluarkan akun non-pengadaan',
+                REVISI_LEBIH: 'Menyesuaikan pagu paket dengan pagu DIPA revisi terakhir', REVISI_DANA: 'Penyesuaian sumber dana dengan DIPA' }[p.verdict];
             if (!anggaran.length) {
                 actions.push({ type: 'BATAL', paketId: p.id, nama: p.nama, pagu: p.pagu, pilih: true, alasan: alasan + '; tidak ada MAK DIPA yang tersisa' });
                 continue;
             }
-            actions.push({ type: 'REVISI', donorId: p.id, alasan, catatan, pilih: !anggaran.some(r => r.lebih),
-                pakets: [paketDari(p, anggaran, akunMap, cfg)] });
+            // tidak ada yang berubah (kelebihan akun sudah habis ditangani paket lain) → lewati
+            const sig = xs => xs.map(r => `${r.mak}|${Math.round(r.pagu)}|${r.danaApbn || 'A'}`).sort().join(';');
+            if (!catatan.length && sig(anggaran) === sig((p.sumberDana || []).filter(x => x.pagu))) continue;
+            actions.push({ type: 'REVISI', donorId: p.id, alasan, catatan, pilih: !perluKeputusan, pakets: [paketDari(p, anggaran, akunMap, cfg)] });
         }
 
         // e. paket baru untuk sisa pagu pengadaan yang belum terumumkan,
