@@ -370,7 +370,8 @@ const UI = (() => {
                     pk.jenisList = donor.jenisRaw.length === 1 ? null : donor.jenisRaw.map(j => ({ ...j }));
                     pk.jenis = Object.keys(Sirup.JENIS_ID).find(k => Sirup.JENIS_ID[k] === (donor.jenisRaw[0] || {}).jenisid) || pk.jenis;
                     pk.spp = donor.spp; pk.volume = donor.volume;
-                    if (pk.pertahankan) { pk.uraian = donor.uraianRaw || pk.uraian; pk.spesifikasi = donor.spesifikasiRaw || pk.spesifikasi; }
+                    pk.uraian = donor.uraianRaw || pk.uraian; pk.spesifikasi = donor.spesifikasiRaw || pk.spesifikasi;
+                    pk.jenisList = donor.jenisRaw.map(j => ({ ...j }));
                     pk.jadwal = { awalPengadaan: donor.tanggal.awalPengadaan, akhirPengadaan: donor.tanggal.akhirPengadaan, awalPekerjaan: donor.tanggal.awalPekerjaan, akhirPekerjaan: donor.tanggal.akhirPekerjaan,
                         awalKebutuhan: Analysis.ym(donor.pemanfaatan && donor.pemanfaatan.mulai) || donor.tanggal.awalPekerjaan, kebutuhan: Analysis.ym(donor.pemanfaatan && donor.pemanfaatan.akhir) || donor.tanggal.akhirPekerjaan };
                     const used = new Set();
@@ -614,7 +615,9 @@ const UI = (() => {
     async function previewPayload() {
         const a = S.plan.actions.find(x => x.type === 'REVISI' && x.pilih);
         if (!a) return;
-        const pay = await Sirup.revisiSatuKeBanyak(S.ctx, a.donor, a.pakets.map(p => { validatePaket(p); return p; }), a.alasan, { dryRun: true });
+        a.pakets.forEach(p => validatePaket(p));
+        const pay = a.metodeRevisi === 'satukesatu' ? await Sirup.revisiSatuKeSatu(S.ctx, a.donor, a.pakets[0], a.alasan, { dryRun: true })
+            : await Sirup.revisiSatuKeBanyak(S.ctx, a.donor, a.pakets, a.alasan, { dryRun: true });
         await modal(`Payload revisi donor ${a.donorId} (tidak dikirim)`, h('div', {}, ...pay.payloads.map((f, i) => h('details', { open: i === 0 }, h('summary', {}, `POST #${i + 1}`), h('pre', { class: 'mono', style: { whiteSpace: 'pre-wrap' } }, [...f.entries()].map(([k, v]) => `${k} = ${v}`).join('\n'))))), [['Tutup', false, 'pri']]);
     }
 
@@ -632,7 +635,8 @@ const UI = (() => {
         const ok = await confirmBox('Jalankan aksi di SiRUP', `<ul>
             <li>Batalkan ${batal.length} paket terumumkan (non-pengadaan)</li>
             <li>Kembalikan ${batalFd.length} final draft ke PPK</li>
-            <li>${revisi.length} revisi satu-ke-banyak → ${nPaket} paket hasil, langsung diumumkan</li>
+            <li>${revisi.filter(a => a.metodeRevisi === 'satukesatu').length} revisi satu-ke-satu (hasil langsung terumumkan)</li>
+            <li>${revisi.filter(a => a.metodeRevisi !== 'satukesatu').length} revisi satu-ke-banyak → ${revisi.filter(a => a.metodeRevisi !== 'satukesatu').reduce((s, a) => s + a.pakets.length, 0)} paket hasil (Final Draft), langsung diumumkan</li>
             <li>Umumkan ${umumIds.length} final draft</li></ul>
             <p class="note">Semua langkah mengubah data SiRUP dan tercatat atas nama akun KPA ini. Proses berjalan berurutan; bila satu langkah gagal, proses berhenti dan rinciannya tampil di log.</p>`);
         if (!ok) return;
@@ -640,8 +644,10 @@ const UI = (() => {
         for (const a of batal) { if (S.stop) break; await Sirup.batalkanPaket(a.paketId, a.alasan); log(`Dibatalkan ${a.paketId} (${a.nama.slice(0, 50)})`, 'o'); await Sirup.sleep(S.cfg.jeda); }
         for (const a of revisi) {
             if (S.stop) break;
-            log(`Revisi donor ${a.donorId}: ${a.pakets.length} paket…`);
-            const r = await Sirup.revisiSatuKeBanyak(S.ctx, a.donor, a.pakets, a.alasan, { onStep: (i, n) => log(`  simpan paket ${i}/${n}`) });
+            const satu = a.metodeRevisi === 'satukesatu';
+            log(satu ? `Revisi 1→1 paket ${a.donorId}…` : `Revisi 1→N paket ${a.donorId}: ${a.pakets.length} paket (paket #1 = paket existing)…`);
+            const r = satu ? await Sirup.revisiSatuKeSatu(S.ctx, a.donor, a.pakets[0], a.alasan)
+                : await Sirup.revisiSatuKeBanyak(S.ctx, a.donor, a.pakets, a.alasan, { onStep: (i, n) => log(`  simpan paket ${i}/${n}`) });
             log(`  ${r.baru.length} paket baru: ${r.baru.map(p => p.id).join(', ')}${r.donorHilang ? '' : ' — PERHATIAN: paket donor masih ada'}`, r.donorHilang ? 'o' : 'w');
             const fd = r.baru.filter(p => p.status === '2').map(p => p.id);
             if (fd.length) { await Sirup.umumkan(fd); log(`  diumumkan: ${fd.join(', ')}`, 'o'); }

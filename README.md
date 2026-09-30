@@ -29,7 +29,8 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 
 - Revisi 1→N: `kajiulangpaket?jenis=satukebanyak` → satu `POST simpankajiulangonetomanypenyedia` per paket hasil (`isSelesai=true` pada paket terakhir). **Paket asal hilang dari daftar, dan semua paket hasil berstatus Final Draft** sampai diumumkan KPA. Tool langsung mengumumkannya.
 - KPA bisa **membatalkan**, **revisi 1→1**, dan **revisi 1→N**, tetapi tidak bisa membuat paket dari nol. Trik membuat paket tanpa akun PPK: revisi 1→N atas paket existing. **Draft #1 dibiarkan apa adanya** (tool mengirim isi form SiRUP yang sudah terisi otomatis, hasil serialisasi identik dengan FormData browser), lalu draft #2 dst. diisi sebagai paket baru. Form yang sama menjadi template, sehingga field tersembunyi yang tidak dikenal tetap ikut terkirim.
-- Koreksi satu paket (pindah MAK, kurangi pagu, keluarkan baris NP, perbaiki dana) memakai revisi **1→1**. Payload-nya menunggu rekaman demo; sebelum itu eksekusi 1→1 belum aktif.
+- Koreksi satu paket (pindah MAK, kurangi pagu, keluarkan baris NP, perbaiki dana) memakai revisi **1→1**: `kajiulangpaket?jenis=satukesatu` → `formkajiulangsatukesatu` → `POST /revisictr/simpankajiulangonetoonepenyedia` (payload = 1→N tanpa `count`/`isSelesai`). Paket berganti kode dan **langsung berstatus Terumumkan**, jadi tidak perlu diumumkan ulang (rekaman 30 Sep 2026, 67445218 → 67984573).
+- Hasil revisi 1→N selalu berstatus Final Draft. Setiap paket hasil mendapat id baris anggaran/lokasi/jenis baru, walaupun form mengirim id lama, sehingga menyalin id dari form yang terisi otomatis aman.
 - MAK paket = `id_komponen` (id node Komponen PKKR) + teks `SUB.AKUN`. Karena itu cabang PKKR harus ada terlebih dahulu.
 - Node PKKR hasil integrasi terkunci (nama/kode/pagu readonly), hanya PPK-nya yang bisa diubah.
 

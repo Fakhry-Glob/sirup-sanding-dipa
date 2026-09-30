@@ -1061,8 +1061,7 @@ const Sirup = (() => {
             add(`paketLokasi[${i}].id_kabupaten`, l.id_kabupaten); add(`paketLokasi[${i}].detil_lokasi`, l.detil || '');
         });
         add('paket.volume', pk.volume || '1 Paket'); add('paket.keterangan', pk.uraian); add('paket.spesifikasi', pk.spesifikasi);
-        if (pk.praDipa) add('isPraDipa', 'on');
-        add('paket.no_renja', '');
+        if (pk.praDipa) { add('isPraDipa', 'on'); add('paket.no_renja', ''); } // no_renja hanya ada di form bila Pra-DIPA dicentang
         let total = 0;
         pk.anggaran.forEach((a, i) => {
             const parts = a.mak.split('.');
@@ -1077,7 +1076,8 @@ const Sirup = (() => {
             total += Math.round(a.pagu);
         });
         add('totalPaguBersih', total);
-        const jenis = pk.jenisList && pk.jenisList.length ? pk.jenisList : [{ jenisid: JENIS_ID[pk.jenis] || 1, pagu: total }];
+        let jenis = pk.jenisList && pk.jenisList.length ? pk.jenisList : [{ jenisid: JENIS_ID[pk.jenis] || 1, pagu: total }];
+        if (jenis.length === 1) jenis = [{ ...jenis[0], jenisid: JENIS_ID[pk.jenis] || jenis[0].jenisid, pagu: total }];
         jenis.forEach((j, i) => { add(`paketJenis[${i}].id`, pk.baru ? '' : (j.id || '')); add(`paketJenis[${i}].jenisid`, j.jenisid); add(`paketJenis[${i}].jumlah_pagu`, Math.round(j.pagu)); });
         add('isTKDN', pk.pdn ? 'true' : 'false');
         add('isUMKM', pk.umkm ? 'true' : 'false');
@@ -1149,7 +1149,8 @@ const Sirup = (() => {
             for (const k of KONTROL) f.set(k, kita.get(k) ?? '');
             return f;
         }
-        for (const [k, v] of ours) f.append(k, v);
+        const tplMap = new Map(tpl ? tpl.entries : []);
+        for (const [k, v] of ours) f.append(k, !v && /^(paketLokasi|paketAnggaran|paketJenis)\[\d+\]\.id$/.test(k) && tplMap.get(k) ? tplMap.get(k) : v);
         if (tpl) for (const [k, v] of tpl.entries) if (!kita.has(k) && !ARRAY_FIELD.test(k) && !KONTROL.includes(k)) f.append(k, v);
         return f;
     }
@@ -1189,9 +1190,31 @@ const Sirup = (() => {
         return { baru, donorHilang: !after.some(p => p.id === donor.id), terkirim };
     }
 
+    // Revisi satu ke satu: satu POST ke simpankajiulangonetoonepenyedia (payload = 1→N tanpa count/isSelesai).
+    // Paket asal digantikan paket berkode baru yang langsung berstatus Terumumkan.
+    async function revisiSatuKeSatu(ctx, paketAsal, pk, alasan, { dryRun } = {}) {
+        const ours = payloadPaket(ctx, paketAsal, pk, 1, true, alasan);
+        ours.delete('count'); ours.delete('isSelesai');
+        if (dryRun) return { payloads: [gabungPayload(null, ours, pk)] };
+        const before = new Set((await daftarPaket(ctx.tahun)).map(p => p.id));
+        const r0 = await get(`${BASE}/rup/kajiulangpaket?id=${paketAsal.id}&penyediaAtauSwakelola=penyedia&jenisMtl=&jenis=satukesatu`);
+        if (!/formkajiulangsatukesatu/.test(r0.url)) throw new Error('SiRUP tidak membuka form revisi satu ke satu (URL: ' + r0.url + ')');
+        const tpl = serializeForm(await r0.text());
+        const body = gabungPayload(tpl, ours, pk);
+        body.delete('count'); body.delete('isSelesai');
+        const r = await post(`${BASE}/revisictr/simpankajiulangonetoonepenyedia`, body);
+        if (!/\/rup\/penyedia/.test(r.url)) {
+            const msg = await bacaError(r);
+            throw new Error(`Revisi 1→1 paket ${paketAsal.id} ditolak SiRUP${msg ? ': ' + msg : ''} (URL ${r.url})`);
+        }
+        const after = await daftarPaket(ctx.tahun);
+        const baru = after.filter(p => !before.has(p.id));
+        return { baru, donorHilang: !after.some(p => p.id === paketAsal.id), terkirim: [body] };
+    }
+
     return {
         context, crawlPkkr, tambahPkkr, cariNodeBaru, daftarPpk, daftarPaket, detailPaket, denorm, kabupaten, alasanUmkm,
-        strukturAnggaran, simpanStrukturAnggaran, umumkan, batalFinalDraft, batalkanPaket, revisiSatuKeBanyak, payloadPaket, serializeForm, gabungPayload,
+        strukturAnggaran, simpanStrukturAnggaran, umumkan, batalFinalDraft, batalkanPaket, revisiSatuKeBanyak, revisiSatuKeSatu, payloadPaket, serializeForm, gabungPayload,
         setLogger, JENIS_ID, METODE_ID, PROVINSI, isLoginPage, sleep,
     };
 })();
@@ -1569,7 +1592,8 @@ const UI = (() => {
                     pk.jenisList = donor.jenisRaw.length === 1 ? null : donor.jenisRaw.map(j => ({ ...j }));
                     pk.jenis = Object.keys(Sirup.JENIS_ID).find(k => Sirup.JENIS_ID[k] === (donor.jenisRaw[0] || {}).jenisid) || pk.jenis;
                     pk.spp = donor.spp; pk.volume = donor.volume;
-                    if (pk.pertahankan) { pk.uraian = donor.uraianRaw || pk.uraian; pk.spesifikasi = donor.spesifikasiRaw || pk.spesifikasi; }
+                    pk.uraian = donor.uraianRaw || pk.uraian; pk.spesifikasi = donor.spesifikasiRaw || pk.spesifikasi;
+                    pk.jenisList = donor.jenisRaw.map(j => ({ ...j }));
                     pk.jadwal = { awalPengadaan: donor.tanggal.awalPengadaan, akhirPengadaan: donor.tanggal.akhirPengadaan, awalPekerjaan: donor.tanggal.awalPekerjaan, akhirPekerjaan: donor.tanggal.akhirPekerjaan,
                         awalKebutuhan: Analysis.ym(donor.pemanfaatan && donor.pemanfaatan.mulai) || donor.tanggal.awalPekerjaan, kebutuhan: Analysis.ym(donor.pemanfaatan && donor.pemanfaatan.akhir) || donor.tanggal.akhirPekerjaan };
                     const used = new Set();
@@ -1813,7 +1837,9 @@ const UI = (() => {
     async function previewPayload() {
         const a = S.plan.actions.find(x => x.type === 'REVISI' && x.pilih);
         if (!a) return;
-        const pay = await Sirup.revisiSatuKeBanyak(S.ctx, a.donor, a.pakets.map(p => { validatePaket(p); return p; }), a.alasan, { dryRun: true });
+        a.pakets.forEach(p => validatePaket(p));
+        const pay = a.metodeRevisi === 'satukesatu' ? await Sirup.revisiSatuKeSatu(S.ctx, a.donor, a.pakets[0], a.alasan, { dryRun: true })
+            : await Sirup.revisiSatuKeBanyak(S.ctx, a.donor, a.pakets, a.alasan, { dryRun: true });
         await modal(`Payload revisi donor ${a.donorId} (tidak dikirim)`, h('div', {}, ...pay.payloads.map((f, i) => h('details', { open: i === 0 }, h('summary', {}, `POST #${i + 1}`), h('pre', { class: 'mono', style: { whiteSpace: 'pre-wrap' } }, [...f.entries()].map(([k, v]) => `${k} = ${v}`).join('\n'))))), [['Tutup', false, 'pri']]);
     }
 
@@ -1831,7 +1857,8 @@ const UI = (() => {
         const ok = await confirmBox('Jalankan aksi di SiRUP', `<ul>
             <li>Batalkan ${batal.length} paket terumumkan (non-pengadaan)</li>
             <li>Kembalikan ${batalFd.length} final draft ke PPK</li>
-            <li>${revisi.length} revisi satu-ke-banyak → ${nPaket} paket hasil, langsung diumumkan</li>
+            <li>${revisi.filter(a => a.metodeRevisi === 'satukesatu').length} revisi satu-ke-satu (hasil langsung terumumkan)</li>
+            <li>${revisi.filter(a => a.metodeRevisi !== 'satukesatu').length} revisi satu-ke-banyak → ${revisi.filter(a => a.metodeRevisi !== 'satukesatu').reduce((s, a) => s + a.pakets.length, 0)} paket hasil (Final Draft), langsung diumumkan</li>
             <li>Umumkan ${umumIds.length} final draft</li></ul>
             <p class="note">Semua langkah mengubah data SiRUP dan tercatat atas nama akun KPA ini. Proses berjalan berurutan; bila satu langkah gagal, proses berhenti dan rinciannya tampil di log.</p>`);
         if (!ok) return;
@@ -1839,8 +1866,10 @@ const UI = (() => {
         for (const a of batal) { if (S.stop) break; await Sirup.batalkanPaket(a.paketId, a.alasan); log(`Dibatalkan ${a.paketId} (${a.nama.slice(0, 50)})`, 'o'); await Sirup.sleep(S.cfg.jeda); }
         for (const a of revisi) {
             if (S.stop) break;
-            log(`Revisi donor ${a.donorId}: ${a.pakets.length} paket…`);
-            const r = await Sirup.revisiSatuKeBanyak(S.ctx, a.donor, a.pakets, a.alasan, { onStep: (i, n) => log(`  simpan paket ${i}/${n}`) });
+            const satu = a.metodeRevisi === 'satukesatu';
+            log(satu ? `Revisi 1→1 paket ${a.donorId}…` : `Revisi 1→N paket ${a.donorId}: ${a.pakets.length} paket (paket #1 = paket existing)…`);
+            const r = satu ? await Sirup.revisiSatuKeSatu(S.ctx, a.donor, a.pakets[0], a.alasan)
+                : await Sirup.revisiSatuKeBanyak(S.ctx, a.donor, a.pakets, a.alasan, { onStep: (i, n) => log(`  simpan paket ${i}/${n}`) });
             log(`  ${r.baru.length} paket baru: ${r.baru.map(p => p.id).join(', ')}${r.donorHilang ? '' : ' — PERHATIAN: paket donor masih ada'}`, r.donorHilang ? 'o' : 'w');
             const fd = r.baru.filter(p => p.status === '2').map(p => p.id);
             if (fd.length) { await Sirup.umumkan(fd); log(`  diumumkan: ${fd.join(', ')}`, 'o'); }
