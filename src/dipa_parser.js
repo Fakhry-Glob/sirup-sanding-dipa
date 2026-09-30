@@ -107,7 +107,7 @@ const DipaParser = (() => {
                 }
                 setLevel(ctx, lvl, code);
                 const key = keyOf(ctx, lvl);
-                nodes.set(key, { key, level: lvl, kode: code, uraian: rest, pagu });
+                nodes.set(key, { key, level: lvl, kode: code, uraian: rest.replace(/\s*\[[^\]]*\]\s*/g, ' ').trim(), pagu }); // buang catatan [..] SAKTI
                 last = null;
             }
         }
@@ -198,7 +198,7 @@ const DipaParser = (() => {
             }
             for (const a of anchors) {
                 const txt = [a.rest, ...a.text.sort((p, q) => p.y - q.y || p.x - q.x).map(t => t.s)].filter(Boolean).join(' ')
-                    .replace(/\[Base Line\]/g, '').replace(/\s+/g, ' ').trim();
+                    .replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim();
                 if (a.kind === 'group') {
                     ctx._grp = (ctx._grp || []).slice(0, a.depth - 1);
                     ctx._grp[a.depth - 1] = txt;

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SiRUP Sanding DIPA ↔ RUP & Revisi Massal
 // @namespace    https://github.com/Fakhry-Glob
-// @version      1.1.0
+// @version      1.2.0
 // @description  Sanding PDF DIPA SAKTI (RKK / FA Detail 16 Segmen) dengan PKKR dan RUP terumumkan di SiRUP pasca-putus integrasi SAKTI (31 Juli 2026): tambah cabang PKKR, klasifikasi pengadaan/non-pengadaan, revisi satu-ke-banyak massal dari layar rekap, umumkan, dan samakan Struktur Anggaran.
 // @author       Fakhry-Glob
 // @match        https://sirup.inaproc.id/sirup/*
@@ -13,72 +13,137 @@
 
 (function () {
 'use strict';
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 
 const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 // ─────────────────────────────────────────────────────────────────── STYLE ──
 const CSS = `
 .sdr, .sdr *, .sdr *::before, .sdr *::after { box-sizing: border-box; }
-.sdr { --b:#1F497D; --b2:#2E6DA4; --ink:#0f172a; --mut:#64748b; --line:#e2e8f0; --bg:#f8fafc; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --np:#7c3aed;
-  font: 13px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; color: var(--ink); }
+.sdr { --b:#1F497D; --b2:#2E6DA4; --b-soft:#eaf1fa; --ink:#0f172a; --ink2:#334155; --mut:#64748b; --line:#e2e8f0; --bg:#f4f6fa;
+  --ok:#15803d; --ok-soft:#ecfdf3; --warn:#b45309; --warn-soft:#fffbeb; --bad:#b91c1c; --bad-soft:#fef2f2; --np:#7c3aed; --teal:#0f766e;
+  font: 14px/1.55 "Segoe UI", system-ui, -apple-system, sans-serif; color: var(--ink); }
 .sdr-fab { position: fixed; right: 24px; bottom: 84px; z-index: 99990; display: inline-flex; align-items: center; gap: 8px;
-  padding: 11px 18px; border: 0; border-radius: 999px; cursor: pointer; font: 600 13.5px/1 "Segoe UI", system-ui, sans-serif; color: #fff;
+  padding: 12px 20px; border: 0; border-radius: 999px; cursor: pointer; font: 600 14px/1 "Segoe UI", system-ui, sans-serif; color: #fff;
   background: linear-gradient(135deg, #0f766e 0%, #0e9f8e 100%); box-shadow: 0 6px 18px rgba(15,118,110,.35); }
 .sdr-fab:hover { transform: translateY(-2px); }
-.sdr-ov { position: fixed; inset: 0; z-index: 99991; background: rgba(15,23,42,.55); display: flex; align-items: stretch; justify-content: center; padding: 18px; }
-.sdr-win { background: #fff; border-radius: 12px; width: min(1480px, 100%); display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.3); }
-.sdr-hd { display: flex; align-items: center; gap: 12px; padding: 12px 18px; background: var(--b); color: #fff; }
-.sdr-hd h2 { font-size: 16px; margin: 0; font-weight: 650; flex: 1; }
-.sdr-hd .sdr-ctx { font-size: 12px; opacity: .9; }
-.sdr-x { background: transparent; border: 0; color: #fff; font-size: 22px; cursor: pointer; line-height: 1; }
-.sdr-steps { display: flex; gap: 0; border-bottom: 1px solid var(--line); background: var(--bg); overflow-x: auto; }
-.sdr-step { padding: 10px 16px; cursor: pointer; border: 0; background: transparent; font: inherit; color: var(--mut); border-bottom: 3px solid transparent; white-space: nowrap; }
-.sdr-step.on { color: var(--b); border-bottom-color: var(--b); font-weight: 650; background: #fff; }
-.sdr-step.done::after { content: " ✓"; color: var(--ok); }
-.sdr-body { flex: 1; overflow: auto; padding: 16px 18px; }
-.sdr-foot { border-top: 1px solid var(--line); padding: 8px 18px; max-height: 150px; overflow: auto; background: #0b1220; color: #cbd5e1; font: 12px/1.5 Consolas, monospace; }
-.sdr-foot .e { color: #fca5a5; } .sdr-foot .o { color: #86efac; } .sdr-foot .w { color: #fcd34d; }
-.sdr h3 { font-size: 14.5px; margin: 14px 0 8px; } .sdr h3:first-child { margin-top: 0; }
-.sdr p.note { color: var(--mut); margin: 4px 0 10px; }
-.sdr .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; background: #fff; }
-.sdr .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 12px; }
-.sdr .kpi { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
-.sdr .kpi b { display: block; font-size: 16px; font-variant-numeric: tabular-nums; } .sdr .kpi span { color: var(--mut); font-size: 12px; }
-.sdr .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 13px; border-radius: 8px; border: 1px solid var(--line); background: #fff; cursor: pointer; font: inherit; color: var(--ink); }
+
+/* jendela */
+.sdr-ov { position: fixed; inset: 0; z-index: 99991; background: rgba(15,23,42,.55); display: flex; justify-content: center; padding: 20px; }
+.sdr-win { background: var(--bg); border-radius: 14px; width: min(1320px, 100%); display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.3); }
+.sdr-hd { display: flex; align-items: center; gap: 12px; padding: 14px 22px; background: var(--b); color: #fff; }
+.sdr-hd h2 { font-size: 17px; margin: 0; font-weight: 650; }
+.sdr-hd .sdr-ctx { flex: 1; font-size: 12.5px; opacity: .92; display: flex; gap: 6px; flex-wrap: wrap; }
+.sdr-hd .sdr-ctx span { background: rgba(255,255,255,.14); padding: 3px 10px; border-radius: 999px; }
+.sdr-hd .btn { background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.3); }
+.sdr-x { background: transparent; border: 0; color: #fff; font-size: 24px; cursor: pointer; line-height: 1; padding: 0 4px; }
+
+/* stepper */
+.sdr-steps { display: flex; gap: 4px; padding: 10px 18px; background: #fff; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.sdr-step { display: flex; align-items: center; gap: 8px; padding: 8px 14px; cursor: pointer; border: 0; background: transparent; font: inherit; color: var(--mut); border-radius: 10px; white-space: nowrap; }
+.sdr-step .no { width: 24px; height: 24px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 12px; font-weight: 700; background: #e2e8f0; color: var(--ink2); }
+.sdr-step.on { background: var(--b-soft); color: var(--b); font-weight: 650; }
+.sdr-step.on .no { background: var(--b); color: #fff; }
+.sdr-step.done .no { background: var(--ok); color: #fff; }
+.sdr-body { flex: 1; overflow: auto; padding: 22px 26px 0; }
+
+/* laci log */
+.sdr-log { border-top: 1px solid #1e293b; background: #0b1220; color: #cbd5e1; font: 12.5px/1.55 Consolas, monospace; }
+.sdr-log-bar { display: flex; align-items: center; gap: 10px; padding: 7px 18px; cursor: pointer; user-select: none; }
+.sdr-log-bar b { color: #e2e8f0; font-family: "Segoe UI", system-ui, sans-serif; font-weight: 600; }
+.sdr-log-bar .last { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; opacity: .85; }
+.sdr-log-body { max-height: 0; overflow: auto; padding: 0 18px; transition: max-height .2s; }
+.sdr-log.open .sdr-log-body { max-height: 240px; padding-bottom: 10px; }
+.sdr-log .e { color: #fca5a5; } .sdr-log .o { color: #86efac; } .sdr-log .w { color: #fcd34d; }
+
+/* tipografi & kartu */
+.sdr h3 { font-size: 16px; margin: 0 0 6px; font-weight: 650; }
+.sdr h4 { font-size: 13px; margin: 0 0 10px; font-weight: 700; color: var(--ink2); text-transform: uppercase; letter-spacing: .04em; }
+.sdr p.note { color: var(--mut); margin: 0 0 14px; max-width: 900px; }
+.sdr .card { border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; margin-bottom: 18px; background: #fff; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+.sdr .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.sdr .kpi { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: #fff; }
+.sdr .kpi b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; margin-bottom: 2px; }
+.sdr .kpi span { color: var(--mut); font-size: 12.5px; }
+.sdr .kpi.link { cursor: pointer; } .sdr .kpi.link:hover { border-color: var(--b2); box-shadow: 0 2px 8px rgba(46,109,164,.12); }
+
+/* tombol & input */
+.sdr .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 9px; border: 1px solid #cbd5e1; background: #fff; cursor: pointer; font: inherit; color: var(--ink); white-space: nowrap; }
 .sdr .btn:hover { border-color: var(--b2); } .sdr .btn[disabled] { opacity: .5; cursor: not-allowed; }
-.sdr .btn.pri { background: var(--b); color: #fff; border-color: var(--b); } .sdr .btn.go { background: var(--ok); color: #fff; border-color: var(--ok); }
-.sdr .btn.danger { background: var(--bad); color: #fff; border-color: var(--bad); } .sdr .btn.sm { padding: 3px 8px; font-size: 12px; }
-.sdr .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.sdr .drop { border: 2px dashed #94a3b8; border-radius: 12px; padding: 22px; text-align: center; color: var(--mut); cursor: pointer; }
+.sdr .btn.pri { background: var(--b); color: #fff; border-color: var(--b); } .sdr .btn.go { background: var(--ok); color: #fff; border-color: var(--ok); font-weight: 600; }
+.sdr .btn.danger { background: #fff; color: var(--bad); border-color: #fca5a5; } .sdr .btn.sm { padding: 5px 11px; font-size: 13px; border-radius: 8px; }
+.sdr .btn.ghost { border-color: transparent; background: transparent; color: var(--b2); }
+.sdr .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.sdr input[type=text], .sdr input[type=number], .sdr input[type=month], .sdr select, .sdr textarea { font: inherit; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: var(--ink); max-width: 100%; min-height: 38px; }
+.sdr input:focus, .sdr select:focus, .sdr textarea:focus { outline: 2px solid #bfdbfe; border-color: var(--b2); }
+.sdr textarea { width: 100%; min-height: 96px; resize: vertical; font-size: 13px; line-height: 1.5; }
+.sdr input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--b); cursor: pointer; }
+.sdr .drop { border: 2px dashed #94a3b8; border-radius: 14px; padding: 32px; text-align: center; color: var(--mut); cursor: pointer; background: #fff; }
 .sdr .drop.hover { border-color: var(--b2); background: #eff6ff; }
-.sdr table.t { border-collapse: collapse; width: 100%; font-size: 12.5px; }
-.sdr table.t th, .sdr table.t td { border-bottom: 1px solid var(--line); padding: 5px 7px; text-align: left; vertical-align: top; }
-.sdr table.t th { position: sticky; top: 0; background: #f1f5f9; z-index: 1; font-weight: 650; white-space: nowrap; }
+
+/* tabel */
+.sdr table.t { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+.sdr table.t th, .sdr table.t td { border-bottom: 1px solid var(--line); padding: 9px 12px; text-align: left; vertical-align: top; }
+.sdr table.t th { position: sticky; top: 0; background: #f1f5f9; z-index: 1; font-weight: 650; white-space: nowrap; color: var(--ink2); }
+.sdr table.t tbody tr:hover td { background: #f8fafc; }
 .sdr table.t td.n, .sdr table.t th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.sdr table.t tr.sub td { background: #fafafa; }
-.sdr .tbl { max-height: 60vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
-.sdr .pill { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.sdr table.t tr.sub td { background: #fafbfd; }
+.sdr .tbl { max-height: 62vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.sdr .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .sdr .p-ok { background: #dcfce7; color: var(--ok); } .sdr .p-warn { background: #fef3c7; color: var(--warn); } .sdr .p-bad { background: #fee2e2; color: var(--bad); }
 .sdr .p-np { background: #ede9fe; color: var(--np); } .sdr .p-mut { background: #f1f5f9; color: var(--mut); } .sdr .p-info { background: #dbeafe; color: #1d4ed8; }
-.sdr input[type=text], .sdr input[type=number], .sdr input[type=month], .sdr select, .sdr textarea { font: inherit; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: var(--ink); max-width: 100%; }
-.sdr textarea { width: 100%; min-height: 54px; resize: vertical; font-size: 12px; }
-.sdr .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.sdr .muted { color: var(--mut); } .sdr .mono { font-family: Consolas, monospace; font-size: 12px; }
-.sdr details > summary { cursor: pointer; }
-.sdr .pk { border: 1px solid var(--line); border-radius: 10px; margin: 8px 0; }
-.sdr .pk-hd { display: flex; gap: 8px; align-items: center; padding: 8px 10px; background: #f8fafc; border-radius: 10px 10px 0 0; flex-wrap: wrap; }
-.sdr .pk-bd { padding: 8px 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px 14px; }
-.sdr .pk-bd label { display: block; font-size: 11.5px; color: var(--mut); margin-bottom: 2px; }
-.sdr .pk-bd .wide { grid-column: 1 / -1; }
-.sdr .bulk { position: sticky; top: -16px; z-index: 3; background: #ecfeff; border: 1px solid #a5f3fc; border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; }
-.sdr .lok { display: grid; grid-template-columns: 1fr 1fr 1.4fr auto; gap: 4px; margin-bottom: 4px; }
-.sdr .warnbox { border-left: 4px solid var(--warn); background: #fffbeb; padding: 8px 12px; border-radius: 6px; margin: 8px 0; }
-.sdr .errbox { border-left: 4px solid var(--bad); background: #fef2f2; padding: 8px 12px; border-radius: 6px; margin: 8px 0; }
-.sdr .okbox { border-left: 4px solid var(--ok); background: #f0fdf4; padding: 8px 12px; border-radius: 6px; margin: 8px 0; }
+.sdr .muted { color: var(--mut); } .sdr .mono { font-family: Consolas, monospace; font-size: 13px; }
+.sdr .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.sdr details > summary { cursor: pointer; padding: 6px 0; font-weight: 600; color: var(--ink2); }
+.sdr .warnbox, .sdr .errbox, .sdr .okbox, .sdr .infobox { padding: 12px 16px; border-radius: 10px; margin: 0 0 14px; }
+.sdr .warnbox { border-left: 4px solid var(--warn); background: var(--warn-soft); }
+.sdr .errbox { border-left: 4px solid var(--bad); background: var(--bad-soft); }
+.sdr .okbox { border-left: 4px solid var(--ok); background: var(--ok-soft); }
+.sdr .infobox { border-left: 4px solid var(--b2); background: var(--b-soft); }
+.sdr .prog { height: 6px; background: #e2e8f0; border-radius: 99px; overflow: hidden; margin: 8px 0; } .sdr .prog > i { display: block; height: 100%; background: var(--b2); width: 0; transition: width .2s; }
+
+/* langkah 4: tab segmen, daftar baris, editor */
+.sdr .seg { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; padding: 6px; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+.sdr .seg button { border: 0; background: transparent; padding: 9px 14px; border-radius: 9px; font: inherit; color: var(--ink2); cursor: pointer; display: inline-flex; gap: 8px; align-items: center; }
+.sdr .seg button .cnt { background: #e2e8f0; color: var(--ink2); border-radius: 999px; padding: 1px 8px; font-size: 12px; font-weight: 700; }
+.sdr .seg button.on { background: var(--b); color: #fff; } .sdr .seg button.on .cnt { background: rgba(255,255,255,.25); color: #fff; }
+.sdr .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 6px 0 4px; }
+.sdr .flow > div { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.sdr .flow .no { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--b-soft); color: var(--b); font-weight: 700; margin-bottom: 6px; }
+.sdr .list { display: flex; flex-direction: column; gap: 10px; }
+.sdr .item { background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+.sdr .item.off { opacity: .72; border-style: dashed; }
+.sdr .item.warn { border-color: #fcd34d; }
+.sdr .item-hd { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: start; padding: 14px 16px; }
+.sdr .item-title { font-weight: 600; line-height: 1.4; }
+.sdr .item-sub { color: var(--mut); font-size: 12.5px; margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.sdr .item-side { text-align: right; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+.sdr .item-side b { font-variant-numeric: tabular-nums; font-size: 15px; }
+.sdr .notes { margin: 0 16px 12px 47px; padding: 10px 14px; background: var(--warn-soft); border-radius: 8px; font-size: 13px; color: #78350f; }
+.sdr .notes div + div { margin-top: 3px; }
+.sdr .sub-items { border-top: 1px solid var(--line); padding: 8px 16px 12px 47px; display: flex; flex-direction: column; gap: 8px; }
+.sdr .sub-item { border: 1px solid var(--line); border-radius: 10px; background: #fcfdff; }
+.sdr .sub-item .item-hd { padding: 10px 12px; }
+.sdr .editor { border-top: 1px solid var(--line); padding: 18px 20px; background: #fbfcfe; border-radius: 0 0 12px 12px; display: flex; flex-direction: column; gap: 18px; }
+.sdr .fs { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.sdr .formgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px 18px; }
+.sdr .field label { display: block; font-size: 12.5px; color: var(--ink2); font-weight: 600; margin-bottom: 5px; }
+.sdr .field .hint { font-size: 12px; color: var(--mut); margin-top: 4px; }
+.sdr .range { display: flex; align-items: center; gap: 8px; } .sdr .range span { color: var(--mut); } .sdr .range input { flex: 1; min-width: 140px; }
+.sdr .rangegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px 18px; margin-bottom: 12px; }
+.sdr .checks { display: flex; flex-wrap: wrap; gap: 8px 18px; } .sdr .checks label { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; cursor: pointer; }
+.sdr .mak-t { width: 100%; border-collapse: collapse; } .sdr .mak-t th { font-size: 12px; color: var(--mut); text-align: left; padding: 0 8px 6px 0; font-weight: 600; }
+.sdr .mak-t td { padding: 4px 8px 4px 0; vertical-align: middle; }
+.sdr .lok { display: grid; grid-template-columns: 1fr 1fr 1.5fr auto; gap: 8px; margin-bottom: 8px; }
+.sdr .bulk { background: #ecfeff; border: 1px solid #a5f3fc; border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; }
+.sdr .bulk .formgrid { margin: 10px 0 12px; }
+.sdr-body::after { content: ""; display: block; height: 22px; }
+.sdr .actionbar { padding: 14px 26px; background: #fff; border-top: 1px solid var(--line); box-shadow: 0 -4px 14px rgba(15,23,42,.06); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.sdr .actionbar .sum { flex: 1; color: var(--ink2); font-size: 13.5px; }
+.sdr .empty { text-align: center; color: var(--mut); padding: 34px; background: #fff; border: 1px dashed var(--line); border-radius: 12px; }
+
 .sdr-modal { position: fixed; inset: 0; z-index: 99995; background: rgba(15,23,42,.5); display: flex; align-items: center; justify-content: center; padding: 20px; }
-.sdr-modal > div { background: #fff; border-radius: 12px; max-width: 900px; width: 100%; max-height: 85vh; overflow: auto; padding: 16px 18px; }
-.sdr .prog { height: 6px; background: #e2e8f0; border-radius: 99px; overflow: hidden; margin: 6px 0; } .sdr .prog > i { display: block; height: 100%; background: var(--b2); width: 0; transition: width .2s; }
+.sdr-modal > div { background: #fff; border-radius: 14px; max-width: 940px; width: 100%; max-height: 86vh; overflow: auto; padding: 22px 24px; }
 `;
 
 
@@ -191,7 +256,7 @@ const DipaParser = (() => {
                 }
                 setLevel(ctx, lvl, code);
                 const key = keyOf(ctx, lvl);
-                nodes.set(key, { key, level: lvl, kode: code, uraian: rest, pagu });
+                nodes.set(key, { key, level: lvl, kode: code, uraian: rest.replace(/\s*\[[^\]]*\]\s*/g, ' ').trim(), pagu }); // buang catatan [..] SAKTI
                 last = null;
             }
         }
@@ -282,7 +347,7 @@ const DipaParser = (() => {
             }
             for (const a of anchors) {
                 const txt = [a.rest, ...a.text.sort((p, q) => p.y - q.y || p.x - q.x).map(t => t.s)].filter(Boolean).join(' ')
-                    .replace(/\[Base Line\]/g, '').replace(/\s+/g, ' ').trim();
+                    .replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim();
                 if (a.kind === 'group') {
                     ctx._grp = (ctx._grp || []).slice(0, a.depth - 1);
                     ctx._grp[a.depth - 1] = txt;
@@ -1287,7 +1352,7 @@ const UI = (() => {
         }, store.get('cfg', {})),
     };
     const STEPS = ['1. Data & Login', '2. Struktur PKKR', '3. Sanding RUP', '4. Rekap & Eksekusi', '5. Struktur Anggaran'];
-    let root, body, foot, stepsEl, ctxEl;
+    let root, body, foot, stepsEl, ctxEl, actEl;
 
     // ── helpers DOM ──────────────────────────────────────────────────────
     function h(tag, attrs, ...kids) {
@@ -1303,11 +1368,16 @@ const UI = (() => {
         for (const c of kids.flat()) if (c != null && c !== false) el.append(c.nodeType ? c : document.createTextNode(c));
         return el;
     }
+    let logBody, logLast, logCount, logN = 0;
     function log(msg, cls) {
-        if (!foot) return;
+        if (!logBody) return;
         const t = new Date().toTimeString().slice(0, 8);
-        foot.append(h('div', { class: cls || '' }, `[${t}] ${msg}`));
-        foot.scrollTop = foot.scrollHeight;
+        logBody.append(h('div', { class: cls || '' }, `[${t}] ${msg}`));
+        logBody.scrollTop = logBody.scrollHeight;
+        logLast.textContent = `[${t}] ${msg}`;
+        logLast.className = 'last ' + (cls || '');
+        logCount.textContent = `Log aktivitas (${++logN})`;
+        if (cls === 'e') foot.classList.add('open');
     }
     function modal(title, content, buttons) {
         return new Promise(res => {
@@ -1332,14 +1402,18 @@ const UI = (() => {
         if (root) { root.style.display = 'flex'; return; }
         root = h('div', { class: 'sdr-ov sdr' });
         const win = h('div', { class: 'sdr-win' });
-        ctxEl = h('span', { class: 'sdr-ctx' }, 'memeriksa login…');
+        ctxEl = h('div', { class: 'sdr-ctx' }, h('span', {}, 'memeriksa login…'));
         stepsEl = h('div', { class: 'sdr-steps' });
         body = h('div', { class: 'sdr-body' });
-        foot = h('div', { class: 'sdr-foot' });
+        logCount = h('b', {}, 'Log aktivitas (0)');
+        logLast = h('span', { class: 'last' }, 'belum ada aktivitas');
+        logBody = h('div', { class: 'sdr-log-body' });
+        foot = h('div', { class: 'sdr-log' },
+            h('div', { class: 'sdr-log-bar', onclick: () => foot.classList.toggle('open'), title: 'Klik untuk membuka/menutup log' }, logCount, logLast, h('span', {}, '▴▾')), logBody);
         win.append(h('div', { class: 'sdr-hd' }, h('h2', {}, APP), ctxEl,
             h('button', { class: 'btn sm', onclick: exportExcel, title: 'Unduh kertas kerja Excel' }, '⬇ Excel'),
             h('button', { class: 'btn sm', onclick: settings }, '⚙'),
-            h('button', { class: 'sdr-x', title: 'Tutup', onclick: () => { root.style.display = 'none'; } }, '×')), stepsEl, body, foot);
+            h('button', { class: 'sdr-x', title: 'Tutup', onclick: () => { root.style.display = 'none'; } }, '×')), stepsEl, body, actEl = h('div', { class: 'sdr-act' }), foot);
         root.append(win);
         document.body.append(root);
         Sirup.setLogger(log);
@@ -1349,10 +1423,11 @@ const UI = (() => {
     function renderSteps() {
         stepsEl.innerHTML = '';
         const done = [!!S.dipa && !!S.ctx && S.ctx.login, !!S.pkkr, !!S.an, false, false];
-        STEPS.forEach((s, i) => stepsEl.append(h('button', { class: `sdr-step${i === S.step ? ' on' : ''}${done[i] ? ' done' : ''}`, onclick: () => go(i) }, s)));
+        STEPS.forEach((s, i) => stepsEl.append(h('button', { class: `sdr-step${i === S.step ? ' on' : ''}${done[i] ? ' done' : ''}`, onclick: () => go(i) },
+            h('span', { class: 'no' }, done[i] && i !== S.step ? '✓' : String(i + 1)), s.replace(/^\d+\.\s*/, ''))));
     }
     function go(i) {
-        S.step = i; renderSteps(); body.innerHTML = '';
+        S.step = i; renderSteps(); body.innerHTML = ''; if (actEl) actEl.innerHTML = '';
         [stepData, stepPkkr, stepSanding, stepRekap, stepStruktur][i]();
     }
     async function guard(fn) {
@@ -1372,10 +1447,11 @@ const UI = (() => {
             ctxCard.append(h('h3', {}, 'Akun SiRUP'));
             if (!S.ctx.login) {
                 ctxCard.append(h('div', { class: 'errbox' }, 'Anda belum login di SiRUP. Login dulu dengan akun KPA satker, lalu buka lagi panel ini.'));
-                ctxEl.textContent = 'belum login';
+                ctxEl.innerHTML = ''; ctxEl.append(h('span', {}, 'belum login'));
                 return;
             }
-            ctxEl.textContent = `${S.ctx.username || ''} · ${S.ctx.role} · ${S.ctx.kodeSatker} · TA ${S.ctx.tahun}`;
+            ctxEl.innerHTML = '';
+            ctxEl.append(...[S.ctx.username, S.ctx.role, 'Satker ' + S.ctx.kodeSatker, 'TA ' + S.ctx.tahun].filter(Boolean).map(t => h('span', {}, t)));
             ctxCard.append(h('div', { class: 'kpis' },
                 kpi(S.ctx.nama || '–', 'Nama pengguna'), kpi(S.ctx.role || '–', 'Role'), kpi(S.ctx.kodeSatker || '–', 'Kode satker'), kpi(String(S.ctx.tahun), 'Tahun anggaran')),
                 h('div', {}, S.ctx.satkerNama),
@@ -1625,10 +1701,10 @@ const UI = (() => {
                     if (fv && a.status !== fv) continue;
                     if (qv && !(a.key.toLowerCase().includes(qv) || a.nama.toLowerCase().includes(qv))) continue;
                     const [st, cls] = STATUS_PILL[a.status] || [a.status, 'p-mut'];
-                    const tr = h('tr', { style: { cursor: 'pointer' } }, h('td', { class: 'mono' }, a.key), h('td', {}, a.nama), h('td', { class: 'n' }, fmt(a.pagu)),
-                        h('td', { class: 'n' }, fmt(a.P)), h('td', { class: 'n' }, fmt(a.NP)), h('td', { class: 'n' }, a.CEK ? fmt(a.CEK) : ''),
-                        h('td', { class: 'n' }, fmt(a.rupU)), h('td', { class: 'n' }, a.rupFD ? fmt(a.rupFD) : ''), h('td', { class: 'n' }, fmt(a.selisih)), h('td', {}, pill(st, cls)));
-                    const sub = h('tr', { class: 'sub', style: { display: 'none' } }, h('td', { colspan: 10 }, detailAkun(a)));
+                    const tr = h('tr', { style: { cursor: 'pointer' } }, h('td', {}, h('div', { class: 'mono' }, a.key), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, a.nama)), h('td', {}, pill(st, cls)),
+                        h('td', { class: 'n' }, fmt(a.pagu)), h('td', { class: 'n' }, fmt(a.P)), h('td', { class: 'n' }, fmt(a.NP + a.CEK)),
+                        h('td', { class: 'n' }, fmt(a.rupU)), h('td', { class: 'n' }, a.rupFD ? fmt(a.rupFD) : '–'), h('td', { class: 'n', style: { color: a.selisih > 1000 ? '#b45309' : a.selisih < -1000 ? '#b91c1c' : '' } }, fmt(a.selisih)));
+                    const sub = h('tr', { class: 'sub', style: { display: 'none' } }, h('td', { colspan: 8 }, detailAkun(a)));
                     tr.addEventListener('click', () => { sub.style.display = sub.style.display === 'none' ? '' : 'none'; });
                     tb.append(tr, sub);
                 }
@@ -1637,7 +1713,7 @@ const UI = (() => {
             box.append(h('h3', {}, 'Sanding per akun (MAK 7 segmen)'),
                 h('p', { class: 'note' }, 'Klik baris untuk melihat item DIPA dan paket RUP-nya. Klasifikasi item bisa diubah; rencana aksi dihitung ulang otomatis.'),
                 h('div', { class: 'row' }, flt, q), h('div', { class: 'tbl', style: { marginTop: '6px' } }, h('table', { class: 't' },
-                    h('thead', {}, h('tr', {}, ...['MAK', 'Akun', 'Pagu', 'Pengadaan', 'Non', 'Cek', 'RUP umum', 'RUP FD', 'Selisih', 'Status'].map((t, i) => h('th', { class: i >= 2 && i <= 8 ? 'n' : '' }, t)))), tb)));
+                    h('thead', {}, h('tr', {}, ...['MAK / akun', 'Status', 'Pagu DIPA', 'Pengadaan', 'Non / cek', 'RUP terumumkan', 'RUP final draft', 'Selisih'].map((t, i) => h('th', { class: i >= 2 ? 'n' : '' }, t)))), tb)));
             draw();
             if (S.an.orphans.length) {
                 const byPrefix = {};
@@ -1713,207 +1789,316 @@ const UI = (() => {
         return k ? ((k.manualTwin && k.manualTwin.id) || k.id) : null;
     }
 
+    // Langkah 4 dipecah menjadi sub-tab supaya tiap jenis aksi tampil sendiri-sendiri.
+    let rekapTab = 'ringkasan';
     function stepRekap() {
         if (needDipa()) return;
         if (!S.pakets) { body.append(h('div', { class: 'warnbox' }, 'Jalankan langkah 3 (sanding RUP) dulu.')); return; }
         ensureAnalysis();
         const acts = S.plan.actions;
         const T = t => acts.filter(a => a.type === t);
-        const revisi = T('REVISI');
-        const nBaru = revisi.reduce((s, a) => s + a.pakets.filter(p => p.baru).length, 0);
-        body.append(h('div', { class: 'kpis' },
-            kpi(String(T('PKKR_ADD').reduce((s, a) => s + a.nodes.length, 0)), 'Cabang PKKR baru'), kpi(String((T('UMUMKAN')[0] || { ids: [] }).ids.length), 'Final draft siap diumumkan'),
-            kpi(String(T('BATAL').length), 'Paket perlu dibatalkan'), kpi(String(revisi.filter(a => !a.pakets.some(p => p.baru)).length), 'Paket perlu direvisi'),
-            kpi(String(nBaru), 'Paket baru (via revisi 1→N)'), kpi(String(T('BATAL_FD').length), 'Final draft bermasalah')));
+        const rev11 = T('REVISI').filter(a => a.metodeRevisi === 'satukesatu');
+        const rev1n = T('REVISI').filter(a => a.metodeRevisi !== 'satukesatu');
+        const umum = T('UMUMKAN')[0];
+        if (umum) umum.pilihIds = umum.pilihIds || new Set(umum.ids);
+        const nBaru = rev1n.reduce((s, a) => s + a.pakets.filter(p => p.baru).length, 0);
+        const TABS = [
+            ['ringkasan', 'Ringkasan', null],
+            ['r11', 'Koreksi paket (1→1)', rev11.length],
+            ['r1n', 'Paket baru (1→N)', nBaru],
+            ['batal', 'Batalkan', T('BATAL').length],
+            ['fd', 'Final draft', T('BATAL_FD').length + (umum ? umum.ids.length : 0)],
+        ];
+        const seg = h('div', { class: 'seg' }, ...TABS.map(([k, l, n]) => h('button', { class: rekapTab === k ? 'on' : '', onclick: () => { rekapTab = k; go(3); } }, l, n == null ? null : h('span', { class: 'cnt' }, String(n)))));
+        const content = h('div', {});
+        body.append(seg, content);
+        ({ ringkasan: tabRingkasan, r11: tabKoreksi, r1n: tabPaketBaru, batal: tabBatal, fd: tabFinalDraft })[rekapTab](content, { T, rev11, rev1n, umum, nBaru });
+        actEl.append(actionBar());
+    }
+
+    function tabRingkasan(el, { T, rev11, rev1n, umum, nBaru }) {
+        const go4 = k => () => { rekapTab = k; go(3); };
+        const k = (v, l, tab) => { const d = kpi(v, l); if (tab) { d.classList.add('link'); d.addEventListener('click', go4(tab)); } return d; };
+        el.append(h('div', { class: 'kpis' },
+            k(String(rev11.length), 'Paket perlu dikoreksi (revisi 1→1)', 'r11'),
+            k(String(nBaru), `Paket baru, dititipkan ke ${rev1n.length} paket existing (1→N)`, 'r1n'),
+            k(String(T('BATAL').length), 'Paket non-pengadaan perlu dibatalkan', 'batal'),
+            k(String(umum ? umum.ids.length : 0), 'Final draft siap diumumkan', 'fd'),
+            k(String(T('BATAL_FD').length), 'Final draft bermasalah', 'fd'),
+            k(String(T('PKKR_ADD').reduce((s, a) => s + a.nodes.length, 0)), 'Cabang PKKR belum dibuat (langkah 2)')));
         const danaRup = new Set((S.pakets || []).flatMap(p => (p.sumberDana || []).map(x => x.danaApbn)));
-        if (S.dipa.meta.jenis === 'FA' && [...danaRup].some(d => d && d !== 'A')) body.append(h('div', { class: 'warnbox' }, `Satker ini memakai sumber dana selain RM (${[...danaRup].join(', ')}). FA Detail tidak memuat sumber dana per akun — unggah juga RKK agar paket baru mendapat sumber dana yang benar (default: RM).`));
-        if (T('PKKR_ADD').length) body.append(h('div', { class: 'warnbox' }, 'Masih ada cabang DIPA yang belum ada di PKKR. Paket yang MAK-nya ke cabang itu baru bisa disimpan setelah cabangnya ditambah di langkah 2.'));
+        if (S.dipa.meta.jenis === 'FA' && [...danaRup].some(d => d && d !== 'A')) el.append(h('div', { class: 'warnbox' }, `Satker ini memakai sumber dana selain RM (${[...danaRup].join(', ')}). FA Detail tidak memuat sumber dana per akun — unggah juga RKK agar paket baru mendapat sumber dana yang benar (default: RM).`));
+        if (T('PKKR_ADD').length) el.append(h('div', { class: 'warnbox' }, 'Masih ada cabang DIPA yang belum ada di PKKR. Paket yang MAK-nya ke cabang itu baru bisa disimpan setelah cabangnya dibuat di langkah 2.'));
+        if (T('TANPA_DONOR').length) el.append(h('div', { class: 'errbox' }, `${T('TANPA_DONOR')[0].pakets.length} paket baru tidak punya paket existing untuk dititipi. Minta PPK membuat satu paket, umumkan, lalu jalankan ulang.`));
+        el.append(h('div', { class: 'card' }, h('h3', {}, 'Cara kerja eksekusi'),
+            h('p', { class: 'note' }, 'Semua aksi dijalankan berurutan setelah Anda menekan "Jalankan aksi terpilih" dan menyetujui ringkasannya. Aksi yang tidak dicentang dilewati.'),
+            h('div', { class: 'flow' },
+                h('div', {}, h('div', { class: 'no' }, '1'), h('b', {}, 'Final draft bermasalah'), h('div', { class: 'muted' }, 'Dikembalikan ke PPK (batal final draft) bila dicentang.')),
+                h('div', {}, h('div', { class: 'no' }, '2'), h('b', {}, 'Batalkan'), h('div', { class: 'muted' }, 'Paket terumumkan yang seluruh MAK-nya non-pengadaan dibatalkan (Revisi → Pembatalan).')),
+                h('div', {}, h('div', { class: 'no' }, '3'), h('b', {}, 'Koreksi 1→1'), h('div', { class: 'muted' }, 'MAK, pagu, sumber dana, atau baris non-pengadaan diperbaiki. Hasilnya Final Draft berkode baru → langsung diumumkan.')),
+                h('div', {}, h('div', { class: 'no' }, '4'), h('b', {}, 'Paket baru 1→N'), h('div', { class: 'muted' }, 'Draft #1 = paket existing (dibiarkan apa adanya), draft #2 dst. = paket baru dari DIPA. Semua hasil diumumkan.')),
+                h('div', {}, h('div', { class: 'no' }, '5'), h('b', {}, 'Umumkan final draft'), h('div', { class: 'muted' }, 'Final draft yang sudah sesuai DIPA diumumkan. Lalu lanjut ke langkah 5 (Struktur Anggaran).')))));
+    }
 
-        // bulk editor
-        const bulk = bulkBar();
-        body.append(bulk);
+    // baris daftar generik: checkbox · judul/sub · sisi kanan
+    function itemRow({ pilih, onPilih, title, sub, side, cls }) {
+        const it = h('div', { class: 'item' + (cls ? ' ' + cls : '') + (pilih ? '' : ' off') });
+        const cb = chk(pilih, v => { it.classList.toggle('off', !v); onPilih(v); refreshBar(); });
+        it.append(h('div', { class: 'item-hd' }, cb, h('div', {}, h('div', { class: 'item-title' }, title), sub ? h('div', { class: 'item-sub' }, ...[].concat(sub)) : null), h('div', { class: 'item-side' }, ...[].concat(side || []))));
+        return it;
+    }
+    function pilihSemua(list, set) { return h('div', { class: 'row', style: { marginBottom: '12px' } },
+        h('button', { class: 'btn sm', onclick: () => { list.forEach(a => set(a, true)); go(3); } }, 'Centang semua'),
+        h('button', { class: 'btn sm', onclick: () => { list.forEach(a => set(a, false)); go(3); } }, 'Kosongkan')); }
 
-        // A. umumkan FD
-        for (const a of T('UMUMKAN')) {
-            const list = a.ids.map(id => S.pakets.find(p => p.id === id));
-            a.pilihIds = a.pilihIds || new Set(a.ids);
-            body.append(section(`Umumkan final draft (${a.ids.length})`, 'Final draft yang MAK-nya sudah sesuai DIPA.',
-                h('table', { class: 't' }, h('tbody', {}, list.map(p => h('tr', {}, h('td', {}, chk(a.pilihIds.has(p.id), v => v ? a.pilihIds.add(p.id) : a.pilihIds.delete(p.id))), h('td', { class: 'mono' }, p.id), h('td', {}, p.nama), h('td', { class: 'n' }, fmt(p.pagu))))))));
+    function tabKoreksi(el, { rev11 }) {
+        el.append(h('p', { class: 'note' }, 'Satu paket terumumkan dikoreksi lewat Revisi → Satu ke Satu. Klik "Ubah isian" untuk melihat atau mengubah isi paket setelah revisi. Paket bertanda kuning butuh keputusan Anda (mis. melebihi pagu DIPA) dan tidak dicentang otomatis.'));
+        if (!rev11.length) { el.append(h('div', { class: 'empty' }, 'Tidak ada paket yang perlu dikoreksi.')); return; }
+        el.append(pilihSemua(rev11, (a, v) => { a.pilih = v; }));
+        el.append(h('div', { class: 'list' }, ...rev11.map(a => revisiItem(a))));
+    }
+    function revisiItem(a) {
+        const donor = a.donor, pk = a.pakets[0];
+        const totalLama = donor ? donor.pagu : 0, totalBaru = pk.anggaran.reduce((s, x) => s + (+x.pagu || 0), 0);
+        const it = itemRow({ pilih: a.pilih, onPilih: v => { a.pilih = v; }, cls: a.catatan && a.catatan.some(c => /melebihi|dikurangi/.test(c)) ? 'warn' : '',
+            title: donor ? donor.nama : a.donorId,
+            sub: [h('span', { class: 'mono' }, a.donorId), pill(a.alasan, 'p-info')],
+            side: [h('b', {}, 'Rp' + fmt(totalBaru)), totalLama !== totalBaru ? h('span', { class: 'muted', style: { fontSize: '12px' } }, `semula Rp${fmt(totalLama)}`) : null] });
+        if (a.catatan && a.catatan.length) it.append(h('div', { class: 'notes' }, ...a.catatan.map(c => h('div', {}, '• ' + c))));
+        const ed = paketEditor(a, pk, 0, true);
+        it.append(ed.bar, ed.body);
+        return it;
+    }
+
+    function tabPaketBaru(el, { rev1n, nBaru }) {
+        el.append(h('p', { class: 'note' }, 'KPA tidak bisa membuat paket baru, jadi paket baru "dititipkan" lewat Revisi → Satu ke Banyak atas paket existing yang sudah benar. Draft #1 = paket existing (dikirim apa adanya dari form SiRUP), draft #2 dst. = paket baru di bawah ini.'));
+        if (!rev1n.length) { el.append(h('div', { class: 'empty' }, 'Tidak ada paket baru yang perlu dibuat.')); return; }
+        el.append(bulkBar(nBaru));
+        for (const a of rev1n) {
+            const donor = a.donor;
+            const grp = h('div', { class: 'item' + (a.pilih ? '' : ' off'), style: { marginBottom: '14px' } });
+            grp.append(h('div', { class: 'item-hd' }, chk(a.pilih, v => { a.pilih = v; grp.classList.toggle('off', !v); refreshBar(); }),
+                h('div', {}, h('div', { class: 'item-title' }, `Dititipkan ke paket existing ${a.donorId}`),
+                    h('div', { class: 'item-sub' }, donor ? donor.nama : '', pill('draft #1 tidak diubah', 'p-mut'))),
+                h('div', { class: 'item-side' }, h('b', {}, `${a.pakets.length - 1} paket baru`), h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Rp' + fmt(a.pakets.slice(1).reduce((s, p) => s + p.anggaran.reduce((t, x) => t + x.pagu, 0), 0))))));
+            const subs = h('div', { class: 'sub-items' });
+            a.pakets.forEach((pk, i) => { if (i === 0) return; const ed = paketEditor(a, pk, i, false); subs.append(ed.el); });
+            grp.append(subs);
+            el.append(grp);
         }
-        // B. batalkan
-        if (T('BATAL').length) body.append(section(`Batalkan paket terumumkan (${T('BATAL').length})`, 'Seluruh MAK paket ini adalah belanja non-pengadaan (atau tidak lagi ada di DIPA).',
-            h('table', { class: 't' }, h('tbody', {}, T('BATAL').map(a => {
-                const al = h('input', { type: 'text', value: a.alasan, style: { width: '100%' } }); al.addEventListener('input', () => { a.alasan = al.value; });
-                return h('tr', {}, h('td', {}, chk(a.pilih, v => { a.pilih = v; })), h('td', { class: 'mono' }, a.paketId), h('td', {}, a.nama), h('td', { class: 'n' }, fmt(a.pagu)), h('td', { style: { minWidth: '280px' } }, al));
-            })))));
-        // C. FD bermasalah
-        if (T('BATAL_FD').length) body.append(section(`Final draft bermasalah (${T('BATAL_FD').length})`, 'Tidak diumumkan. Centang untuk mengembalikan ke PPK (batal final draft) agar diperbaiki.',
-            h('table', { class: 't' }, h('tbody', {}, T('BATAL_FD').map(a => h('tr', {}, h('td', {}, chk(a.pilih, v => { a.pilih = v; })), h('td', { class: 'mono' }, a.paketId), h('td', {}, a.nama), h('td', { class: 'n' }, fmt(a.pagu)), h('td', { class: 'muted' }, a.alasan)))))));
-        // D. revisi
-        if (revisi.length) {
-            const wrap = h('div', {});
-            for (const a of revisi) wrap.append(revisiCard(a));
-            body.append(section(`Revisi paket (${revisi.length} revisi, ${revisi.reduce((s, a) => s + a.pakets.length, 0)} paket hasil)`,
-                'Koreksi satu paket memakai revisi Satu ke Satu; penambahan paket memakai Satu ke Banyak (paket #1 = paket existing). Keduanya menghasilkan paket berkode baru berstatus Final Draft, yang langsung diumumkan tool setelah revisi tersimpan. Paket dengan catatan "melebihi pagu DIPA" tidak dicentang — putuskan dulu nilainya.', wrap));
-        }
-        if (T('TANPA_DONOR').length) body.append(h('div', { class: 'errbox' }, `${T('TANPA_DONOR')[0].pakets.length} paket baru tidak punya paket donor (tidak ada paket terumumkan yang bersih). Minta PPK membuat satu paket, umumkan, lalu jalankan ulang.`));
+    }
 
-        body.append(h('div', { class: 'row', style: { position: 'sticky', bottom: '-16px', background: '#fff', padding: '10px 0', borderTop: '1px solid #e2e8f0' } },
-            h('button', { class: 'btn', onclick: previewPayload }, 'Pratinjau payload revisi'),
-            h('button', { class: 'btn go', disabled: !S.ctx.isKPA, onclick: () => guard(runRekap) }, '▶ Jalankan aksi terpilih'),
-            h('button', { class: 'btn danger', onclick: () => { S.stop = true; log('Permintaan berhenti diterima; proses berhenti setelah langkah berjalan selesai.', 'w'); } }, '■ Hentikan')));
+    function tabBatal(el, { T }) {
+        const list = T('BATAL');
+        el.append(h('p', { class: 'note' }, 'Paket terumumkan yang seluruh MAK-nya belanja non-pengadaan (gaji, perjalanan dinas, honor, bantuan, BPJS/PPNPN…) atau tidak lagi ada di DIPA. Dibatalkan lewat Revisi → Pembatalan; alasan di bawah dikirim ke SiRUP.'));
+        if (!list.length) { el.append(h('div', { class: 'empty' }, 'Tidak ada paket yang perlu dibatalkan.')); return; }
+        el.append(pilihSemua(list, (a, v) => { a.pilih = v; }));
+        el.append(h('div', { class: 'list' }, ...list.map(a => {
+            const it = itemRow({ pilih: a.pilih, onPilih: v => { a.pilih = v; }, title: a.nama, sub: [h('span', { class: 'mono' }, a.paketId)], side: [h('b', {}, 'Rp' + fmt(a.pagu))] });
+            const al = h('input', { type: 'text', value: a.alasan, style: { width: '100%' } }); al.addEventListener('input', () => { a.alasan = al.value; });
+            it.append(h('div', { style: { padding: '0 16px 14px 47px' } }, h('div', { class: 'field' }, h('label', {}, 'Alasan pembatalan'), al)));
+            return it;
+        })));
+    }
+
+    function tabFinalDraft(el, { T, umum }) {
+        if (umum) {
+            el.append(h('h3', {}, `Siap diumumkan (${umum.ids.length})`), h('p', { class: 'note' }, 'Final draft yang MAK-nya sudah sesuai DIPA.'));
+            el.append(h('div', { class: 'list', style: { marginBottom: '22px' } }, ...umum.ids.map(id => {
+                const p = S.pakets.find(x => x.id === id) || { nama: id, pagu: 0 };
+                return itemRow({ pilih: umum.pilihIds.has(id), onPilih: v => { v ? umum.pilihIds.add(id) : umum.pilihIds.delete(id); }, title: p.nama, sub: [h('span', { class: 'mono' }, id)], side: [h('b', {}, 'Rp' + fmt(p.pagu))] });
+            })));
+        }
+        const list = T('BATAL_FD');
+        el.append(h('h3', {}, `Bermasalah (${list.length})`), h('p', { class: 'note' }, 'Tidak diumumkan. Centang untuk mengembalikan ke PPK (batal final draft) agar diperbaiki atau dihapus PPK.'));
+        if (!list.length) { el.append(h('div', { class: 'empty' }, 'Tidak ada final draft bermasalah.')); return; }
+        el.append(h('div', { class: 'list' }, ...list.map(a => itemRow({ pilih: a.pilih, onPilih: v => { a.pilih = v; }, cls: 'warn', title: a.nama, sub: [h('span', { class: 'mono' }, a.paketId), h('span', {}, a.alasan)], side: [h('b', {}, 'Rp' + fmt(a.pagu))] }))));
+    }
+
+    let barSum;
+    function ringkasPilihan() {
+        const acts = S.plan.actions, T = t => acts.filter(a => a.type === t);
+        const rev = T('REVISI').filter(a => a.pilih);
+        const n11 = rev.filter(a => a.metodeRevisi === 'satukesatu').length;
+        const n1n = rev.filter(a => a.metodeRevisi !== 'satukesatu').reduce((s, a) => s + a.pakets.length - 1, 0);
+        const umum = T('UMUMKAN')[0];
+        const parts = [[n11, 'koreksi 1→1'], [n1n, 'paket baru'], [T('BATAL').filter(a => a.pilih).length, 'pembatalan'], [T('BATAL_FD').filter(a => a.pilih).length, 'kembali ke PPK'], [umum ? umum.pilihIds.size : 0, 'diumumkan']].filter(([n]) => n);
+        return parts.length ? 'Dipilih: ' + parts.map(([n, l]) => `${n} ${l}`).join(' · ') : 'Belum ada aksi yang dipilih.';
+    }
+    function refreshBar() { if (barSum) barSum.textContent = ringkasPilihan(); }
+    function actionBar() {
+        barSum = h('span', { class: 'sum' }, ringkasPilihan());
+        return h('div', { class: 'actionbar' }, barSum,
+            h('button', { class: 'btn', onclick: previewPayload }, 'Pratinjau payload'),
+            h('button', { class: 'btn danger', onclick: () => { S.stop = true; log('Permintaan berhenti diterima; proses berhenti setelah langkah berjalan selesai.', 'w'); } }, '■ Hentikan'),
+            h('button', { class: 'btn go', disabled: !S.ctx.isKPA, onclick: () => guard(runRekap) }, '▶ Jalankan aksi terpilih'));
     }
     function chk(v, fn) { const c = h('input', { type: 'checkbox', checked: v }); c.addEventListener('change', () => fn(c.checked)); return c; }
     function section(title, note, content) { return h('div', { class: 'card' }, h('h3', {}, title), h('p', { class: 'note' }, note), content); }
 
-    function revisiCard(a) {
-        const donor = a.donor;
-        const box = h('div', { class: 'pk', style: { borderColor: a.pilih ? '#94a3b8' : '#fcd34d' } });
-        box.append(h('div', { class: 'pk-hd' }, chk(a.pilih, v => { a.pilih = v; box.style.borderColor = v ? '#94a3b8' : '#fcd34d'; }),
-            pill(a.metodeRevisi === 'satukesatu' ? 'Revisi 1→1' : 'Revisi 1→N', a.metodeRevisi === 'satukesatu' ? 'p-info' : 'p-ok'),
-            h('b', {}, `${a.metodeRevisi === 'satukesatu' ? 'Paket' : 'Donor'} ${a.donorId}`), h('span', {}, donor ? donor.nama : ''), pill(donor ? Analysis.ST[donor.status] : '', 'p-mut'), h('span', { class: 'muted' }, a.alasan),
-            h('span', { style: { marginLeft: 'auto' } }, `${a.pakets.length} paket hasil · Rp${fmt(a.pakets.reduce((s, p) => s + p.anggaran.reduce((t, x) => t + x.pagu, 0), 0))}`)));
-        if (a.catatan && a.catatan.length) box.append(h('div', { class: 'warnbox', style: { margin: '6px 10px' } }, ...a.catatan.map(c => h('div', {}, '• ' + c))));
-        a.pakets.forEach((pk, i) => box.append(paketEditor(a, pk, i)));
-        return box;
-    }
-
     const JENIS = Object.keys(Sirup.JENIS_ID);
     const METODE = [...Object.keys(Sirup.METODE_ID), 'Dikecualikan'];
-    function paketEditor(act, pk, idx) {
-        const el = h('div', { style: { borderTop: '1px dashed #e2e8f0' } });
-        const sel = h('input', { type: 'checkbox', class: 'sdr-bulk-sel' }); sel._pk = pk;
-        const title = h('input', { type: 'text', value: pk.nama, style: { flex: 1, minWidth: '300px' } }); title.addEventListener('input', () => { pk.nama = title.value; });
+    // Editor satu paket. Mengembalikan {el} (baris paket baru) atau {bar, body} (untuk kartu koreksi).
+    function paketEditor(act, pk, idx, embedded) {
         const total = h('b', {});
         const refreshTotal = () => { total.textContent = 'Rp' + fmt(pk.anggaran.reduce((s, x) => s + (+x.pagu || 0), 0)); };
-        const hd = h('div', { class: 'pk-hd', style: { background: pk.baru ? '#f0fdfa' : '#f8fafc', borderRadius: 0 } }, sel,
-            pill(act.metodeRevisi === 'satukesatu' ? 'Isi paket setelah revisi' : idx === 0 ? (pk.baru ? 'Paket #1' : 'Paket #1 (menggantikan donor)') : `Paket baru #${idx + 1}`, pk.baru ? 'p-ok' : 'p-info'), title, total);
-        const ringkas = h('span', { class: 'muted', style: { fontSize: '12px' } });
+        refreshTotal();
+        const ringkas = h('span', {});
         const upd = () => { ringkas.textContent = `${pk.jenis} · ${pk.metode} · pemilihan ${pk.jadwal.awalPengadaan || '?'} · ${pk.lokasiRaw.length} lokasi · ${pk.anggaran.length} MAK`; };
         upd();
-        const tog = h('button', { class: 'btn sm' }, '▸ isian');
-        if (pk.pertahankan) {
-            title.disabled = true;
-            hd.append(h('span', { class: 'muted', style: { fontSize: '12px' } }, 'paket existing — dikirim apa adanya dari form SiRUP, tidak diubah'));
-            el.append(hd);
-            return el;
-        }
-        hd.append(ringkas, tog);
-        if (idx > 0) hd.append(h('button', { class: 'btn sm', title: 'Buang paket ini dari revisi', onclick: () => { act.pakets.splice(idx, 1); go(3); } }, '✕'));
-        const bd = h('div', { class: 'pk-bd', style: { display: 'none' } });
+        const err = validatePaket(pk);
+        const tog = h('button', { class: 'btn sm' + (err.length ? '' : ''), title: err.join(', ') }, '✎ Ubah isian');
+        const bd = h('div', { class: 'editor', style: { display: 'none' } });
         let built = false;
         tog.addEventListener('click', () => {
             if (!built) { buildBody(); built = true; }
             const show = bd.style.display === 'none';
-            bd.style.display = show ? '' : 'none'; tog.textContent = show ? '▾ isian' : '▸ isian'; upd();
+            bd.style.display = show ? '' : 'none'; tog.textContent = show ? '▴ Tutup isian' : '✎ Ubah isian'; upd();
         });
-        el.append(hd, bd);
-        if (validatePaket(pk).length) { tog.style.borderColor = '#b91c1c'; tog.title = validatePaket(pk).join(', '); }
-        return el;
+        const errPill = err.length ? pill(err.length === 1 ? err[0] : `${err.length} isian perlu diperbaiki`, 'p-bad') : null;
+        if (embedded) {
+            return { bar: h('div', { class: 'row', style: { padding: '0 16px 14px 47px' } }, tog, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ringkas), errPill), body: bd };
+        }
+        const sel = h('input', { type: 'checkbox', class: 'sdr-bulk-sel' }); sel._pk = pk;
+        sel.addEventListener('change', () => { if (bulkCount) bulkCount(); });
+        const title = h('input', { type: 'text', value: pk.nama, style: { width: '100%' } }); title.addEventListener('input', () => { pk.nama = title.value; });
+        const el = h('div', { class: 'sub-item' },
+            h('div', { class: 'item-hd' }, sel, h('div', {}, title, h('div', { class: 'item-sub' }, pill(`Paket baru #${idx + 1}`, 'p-ok'), ringkas, errPill)),
+                h('div', { class: 'item-side' }, total, h('div', { class: 'row' }, tog,
+                    h('button', { class: 'btn sm ghost', title: 'Buang paket ini dari rencana', onclick: () => { act.pakets.splice(idx, 1); go(3); } }, 'Buang')))), bd);
+        return { el };
+
         function buildBody() {
-        // MAK
-        const makBox = h('div', { class: 'wide' });
-        const drawMak = () => {
-            makBox.innerHTML = ''; makBox.append(h('label', {}, 'Sumber dana / MAK (Komponen PKKR + SubKomponen.Akun) dan pagu'));
-            pk.anggaran.forEach((a, j) => {
-                const opts = [...new Set([a.mak, ...(a.kandidat || []).map(k => k.key)])];
-                const ms = h('select', { class: 'mono' }, ...opts.map(o => h('option', { value: o, selected: o === a.mak }, o)));
-                const extra = h('input', { type: 'text', class: 'mono', placeholder: 'atau ketik MAK 7 segmen', style: { width: '220px' } });
-                const pg = h('input', { type: 'number', value: Math.round(a.pagu), style: { width: '150px' } });
-                const dana = h('select', { title: 'Sumber dana' }, ...[['A', 'RM'], ['D', 'PNBP'], ['F', 'BLU'], ['T', 'SBSN'], ['B', 'PLN']].map(([v, t]) => h('option', { value: v, selected: (a.danaApbn || 'A') === v }, t)));
-                dana.addEventListener('change', () => { a.danaApbn = dana.value; });
-                const kid = komponenId(a.mak);
-                const warn = h('span', {}, kid ? pill('komponen ' + kid, 'p-mut') : pill('komponen belum ada di PKKR', 'p-bad'));
-                const akun = S.an.akun.get(a.mak);
-                const info = h('span', { class: 'muted' }, akun ? `DIPA pengadaan Rp${fmt(akun.P)} · RUP Rp${fmt(akun.rupU)}` : 'MAK tidak ada di DIPA');
-                ms.addEventListener('change', () => { a.mak = ms.value; drawMak(); });
-                extra.addEventListener('change', () => { if (/^[A-Z]{2}\.\d{4}\.[A-Z0-9]{3}\.[A-Z0-9]{3}\.\d{3}\.[A-Z0-9]{1,2}\.\d{6}$/.test(extra.value.trim())) { a.mak = extra.value.trim(); drawMak(); } else extra.style.borderColor = 'red'; });
-                pg.addEventListener('input', () => { a.pagu = +pg.value || 0; refreshTotal(); });
-                makBox.append(h('div', { class: 'row', style: { marginBottom: '4px' } }, ms, extra, dana, pg, warn, info, a.lebih ? pill('melebihi DIPA Rp' + fmt(a.lebih), 'p-bad') : null,
-                    pk.anggaran.length > 1 ? h('button', { class: 'btn sm', onclick: () => { pk.anggaran.splice(j, 1); drawMak(); refreshTotal(); } }, '✕') : null));
-            });
-            makBox.append(h('button', { class: 'btn sm', onclick: () => { pk.anggaran.push({ mak: pk.anggaran[0].mak, pagu: 0 }); drawMak(); } }, '+ baris MAK'));
-            refreshTotal();
-        };
-        drawMak();
-        bd.append(makBox);
-        // jenis / metode / flags
-        const js = h('select', {}, ...JENIS.map(j => h('option', { selected: j === pk.jenis }, j))); js.addEventListener('change', () => { pk.jenis = js.value; pk.jenisList = null; });
-        const mt = h('select', {}, ...METODE.map(m => h('option', { selected: m === pk.metode }, m))); mt.addEventListener('change', () => { pk.metode = mt.value; });
-        bd.append(h('div', {}, h('label', {}, 'Jenis pengadaan'), js), h('div', {}, h('label', {}, 'Metode pemilihan'), mt),
-            h('div', {}, h('label', {}, 'Penanda'), h('div', { class: 'row' },
-                h('label', { style: { display: 'inline' } }, chk(pk.praDipa, v => { pk.praDipa = v; }), ' Pra-DIPA'),
-                h('label', { style: { display: 'inline' } }, chk(pk.pdn, v => { pk.pdn = v; }), ' PDN'),
-                h('label', { style: { display: 'inline' } }, chk(pk.umkm, v => { pk.umkm = v; }), ' Usaha kecil'),
-                h('label', { style: { display: 'inline' } }, chk(pk.spp.ekonomi, v => { pk.spp.ekonomi = v; }), ' SPP-eko'),
-                h('label', { style: { display: 'inline' } }, chk(pk.spp.sosial, v => { pk.spp.sosial = v; }), ' SPP-sos'),
-                h('label', { style: { display: 'inline' } }, chk(pk.spp.lingkungan, v => { pk.spp.lingkungan = v; }), ' SPP-ling'))));
-        // jadwal
-        const mon = (k) => { const i = h('input', { type: 'month', value: pk.jadwal[k] || '' }); i.addEventListener('change', () => { pk.jadwal[k] = i.value; }); return i; };
-        bd.append(h('div', {}, h('label', {}, 'Pemilihan penyedia (awal – akhir)'), h('div', { class: 'row' }, mon('awalPengadaan'), '–', mon('akhirPengadaan'))),
-            h('div', {}, h('label', {}, 'Pelaksanaan kontrak (awal – akhir)'), h('div', { class: 'row' }, mon('awalPekerjaan'), '–', mon('akhirPekerjaan'))),
-            h('div', {}, h('label', {}, 'Pemanfaatan barang/jasa (awal – akhir)'), h('div', { class: 'row' }, mon('awalKebutuhan'), '–', mon('kebutuhan'))));
-        // lokasi
-        bd.append(lokasiEditor(pk));
-        // uraian/spesifikasi
-        const ur = h('textarea', {}, pk.uraian || ''); ur.addEventListener('input', () => { pk.uraian = ur.value; });
-        const sp = h('textarea', {}, pk.spesifikasi || ''); sp.addEventListener('input', () => { pk.spesifikasi = sp.value; });
-        const vol = h('input', { type: 'text', value: pk.volume || '1 Paket' }); vol.addEventListener('input', () => { pk.volume = vol.value; });
-        bd.append(h('div', {}, h('label', {}, 'Volume'), vol), h('div', { class: 'wide grid2' }, h('div', {}, h('label', {}, 'Uraian pekerjaan (dari item DIPA)'), ur), h('div', {}, h('label', {}, 'Spesifikasi pekerjaan'), sp)));
+            const fs = (judul, ...isi) => h('div', { class: 'fs' }, h('h4', {}, judul), ...isi);
+            const field = (label, input, hint) => h('div', { class: 'field' }, h('label', {}, label), input, hint ? h('div', { class: 'hint' }, hint) : null);
+            if (embedded) {
+                const t = h('input', { type: 'text', value: pk.nama, style: { width: '100%' } }); t.addEventListener('input', () => { pk.nama = t.value; });
+                bd.append(fs('Nama paket', t));
+            }
+            // anggaran
+            const makBox = h('div', {});
+            const drawMak = () => {
+                makBox.innerHTML = '';
+                const tb = h('tbody', {});
+                pk.anggaran.forEach((a, j) => {
+                    const opts = [...new Set([a.mak, ...(a.kandidat || []).map(k => k.key)])];
+                    const ms = h('select', { class: 'mono', style: { width: '100%' } }, ...opts.map(o => h('option', { value: o, selected: o === a.mak }, o)));
+                    const extra = h('input', { type: 'text', class: 'mono', placeholder: 'atau ketik MAK 7 segmen', style: { width: '100%', marginTop: '6px' } });
+                    const pg = h('input', { type: 'number', value: Math.round(a.pagu), style: { width: '160px' } });
+                    const dana = h('select', {}, ...[['A', 'RM'], ['D', 'PNBP'], ['F', 'BLU'], ['T', 'SBSN'], ['B', 'PLN']].map(([v, t]) => h('option', { value: v, selected: (a.danaApbn || 'A') === v }, t)));
+                    dana.addEventListener('change', () => { a.danaApbn = dana.value; });
+                    const kid = komponenId(a.mak);
+                    const akun = S.an.akun.get(a.mak);
+                    ms.addEventListener('change', () => { a.mak = ms.value; drawMak(); });
+                    extra.addEventListener('change', () => { if (/^[A-Z]{2}\.\d{4}\.[A-Z0-9]{3}\.[A-Z0-9]{3}\.\d{3}\.[A-Z0-9]{1,2}\.\d{6}$/.test(extra.value.trim())) { a.mak = extra.value.trim(); drawMak(); } else extra.style.borderColor = 'red'; });
+                    pg.addEventListener('input', () => { a.pagu = +pg.value || 0; refreshTotal(); });
+                    tb.append(h('tr', {},
+                        h('td', { style: { width: '44%' } }, ms, extra),
+                        h('td', {}, dana),
+                        h('td', {}, pg),
+                        h('td', {}, h('div', {}, kid ? pill('komponen PKKR ' + kid, 'p-mut') : pill('komponen belum ada di PKKR', 'p-bad')),
+                            h('div', { class: 'hint muted', style: { fontSize: '12px', marginTop: '4px' } }, akun ? `DIPA pengadaan Rp${fmt(akun.P)} · RUP Rp${fmt(akun.rupU)}` : 'MAK tidak ada di DIPA'),
+                            a.lebih ? pill('melebihi DIPA Rp' + fmt(a.lebih), 'p-bad') : null),
+                        h('td', {}, pk.anggaran.length > 1 ? h('button', { class: 'btn sm ghost', onclick: () => { pk.anggaran.splice(j, 1); drawMak(); refreshTotal(); } }, 'Hapus') : null)));
+                });
+                makBox.append(h('table', { class: 'mak-t' }, h('thead', {}, h('tr', {}, h('th', {}, 'MAK (Komponen PKKR + SubKomponen.Akun)'), h('th', {}, 'Dana'), h('th', {}, 'Pagu (Rp)'), h('th', {}, 'Keterangan'), h('th', {}, ''))), tb),
+                    h('button', { class: 'btn sm', style: { marginTop: '6px' }, onclick: () => { pk.anggaran.push({ mak: pk.anggaran[0].mak, pagu: 0, danaApbn: pk.anggaran[0].danaApbn }); drawMak(); } }, '+ Tambah baris MAK'));
+                refreshTotal();
+            };
+            drawMak();
+            bd.append(fs('Anggaran', makBox));
+            // pengadaan
+            const js = h('select', {}, ...JENIS.map(j => h('option', { selected: j === pk.jenis }, j))); js.addEventListener('change', () => { pk.jenis = js.value; pk.jenisList = null; upd(); });
+            const mt = h('select', {}, ...METODE.map(m => h('option', { selected: m === pk.metode }, m))); mt.addEventListener('change', () => { pk.metode = mt.value; upd(); });
+            const cbx = (label, get, set) => h('label', {}, chk(get(), set), label);
+            bd.append(fs('Pengadaan', h('div', { class: 'formgrid' },
+                field('Jenis pengadaan', js), field('Metode pemilihan', mt, 'Paket meeting/penginapan hotel: Dikecualikan'),
+                field('Penanda', h('div', { class: 'checks' },
+                    cbx('Pra-DIPA', () => pk.praDipa, v => { pk.praDipa = v; }), cbx('Produk dalam negeri', () => pk.pdn, v => { pk.pdn = v; }),
+                    cbx('Usaha kecil/koperasi', () => pk.umkm, v => { pk.umkm = v; }))),
+                field('Pengadaan berkelanjutan (SPP)', h('div', { class: 'checks' },
+                    cbx('Ekonomi', () => pk.spp.ekonomi, v => { pk.spp.ekonomi = v; }), cbx('Sosial', () => pk.spp.sosial, v => { pk.spp.sosial = v; }),
+                    cbx('Lingkungan', () => pk.spp.lingkungan, v => { pk.spp.lingkungan = v; }))))));
+            // jadwal
+            const mon = k => { const i = h('input', { type: 'month', value: pk.jadwal[k] || '' }); i.addEventListener('change', () => { pk.jadwal[k] = i.value; upd(); }); return i; };
+            const rng = (a, b) => h('div', { class: 'range' }, mon(a), h('span', {}, 's.d.'), mon(b));
+            bd.append(fs('Jadwal', h('div', { class: 'rangegrid' },
+                field('Pemilihan penyedia', rng('awalPengadaan', 'akhirPengadaan')),
+                field('Pelaksanaan kontrak', rng('awalPekerjaan', 'akhirPekerjaan')),
+                field('Pemanfaatan barang/jasa', rng('awalKebutuhan', 'kebutuhan')))));
+            // lokasi
+            bd.append(fs('Lokasi pekerjaan', lokasiEditor(pk)));
+            // uraian
+            const ur = h('textarea', {}, pk.uraian || ''); ur.addEventListener('input', () => { pk.uraian = ur.value; });
+            const sp = h('textarea', {}, pk.spesifikasi || ''); sp.addEventListener('input', () => { pk.spesifikasi = sp.value; });
+            const vol = h('input', { type: 'text', value: pk.volume || '1 Paket' }); vol.addEventListener('input', () => { pk.volume = vol.value; });
+            bd.append(fs('Uraian & spesifikasi', h('div', { class: 'formgrid', style: { gridTemplateColumns: '1fr' } }, field('Volume pekerjaan', vol)),
+                h('div', { class: 'grid2', style: { marginTop: '12px' } }, field('Uraian pekerjaan', ur, 'Disusun dari item DIPA pada MAK ini'), field('Spesifikasi pekerjaan', sp))));
         }
     }
     function lokasiEditor(pk) {
-        const box = h('div', { class: 'wide' });
+        const box = h('div', {});
         const draw = () => {
-            box.innerHTML = ''; box.append(h('label', {}, 'Lokasi pekerjaan (boleh lebih dari satu)'));
+            box.innerHTML = '';
+            box.append(h('div', { class: 'lok', style: { marginBottom: '4px' } }, ...['Provinsi', 'Kabupaten/Kota', 'Detail lokasi', ''].map(t => h('span', { class: 'muted', style: { fontSize: '12px', fontWeight: 600 } }, t))));
             pk.lokasiRaw.forEach((l, j) => {
-                const pv = h('select', {}, h('option', { value: '' }, '— provinsi —'), ...Sirup.PROVINSI.map((n, i) => n ? h('option', { value: i, selected: +l.id_provinsi === i }, n) : null));
-                const kb = h('select', {}, h('option', { value: '' }, '— kab/kota —'));
+                const pv = h('select', {}, h('option', { value: '' }, '— pilih provinsi —'), ...Sirup.PROVINSI.map((n, i) => n ? h('option', { value: i, selected: +l.id_provinsi === i }, n) : null));
+                const kb = h('select', {}, h('option', { value: '' }, '— pilih kab/kota —'));
                 const fillKab = async () => {
-                    kb.innerHTML = ''; kb.append(h('option', { value: '' }, '— kab/kota —'));
+                    kb.innerHTML = ''; kb.append(h('option', { value: '' }, '— pilih kab/kota —'));
                     if (!pv.value) return;
                     for (const k of await Sirup.kabupaten(+pv.value)) kb.append(h('option', { value: k.id, selected: +l.id_kabupaten === k.id }, k.nama));
                 };
                 pv.addEventListener('change', () => { l.id_provinsi = +pv.value; l.id_kabupaten = ''; fillKab(); });
                 kb.addEventListener('change', () => { l.id_kabupaten = +kb.value; });
-                const dt = h('input', { type: 'text', value: l.detil || '', placeholder: 'detail lokasi' }); dt.addEventListener('input', () => { l.detil = dt.value; });
+                const dt = h('input', { type: 'text', value: l.detil || '', placeholder: 'mis. nama kampus / alamat' }); dt.addEventListener('input', () => { l.detil = dt.value; });
                 fillKab();
-                box.append(h('div', { class: 'lok' }, pv, kb, dt, h('button', { class: 'btn sm', onclick: () => { pk.lokasiRaw.splice(j, 1); draw(); } }, '✕')));
+                box.append(h('div', { class: 'lok' }, pv, kb, dt, h('button', { class: 'btn sm ghost', onclick: () => { pk.lokasiRaw.splice(j, 1); draw(); } }, 'Hapus')));
             });
-            box.append(h('button', { class: 'btn sm', onclick: () => { pk.lokasiRaw.push({ id_provinsi: '', id_kabupaten: '', detil: '' }); draw(); } }, '+ lokasi'));
+            box.append(h('button', { class: 'btn sm', onclick: () => { pk.lokasiRaw.push({ id_provinsi: '', id_kabupaten: '', detil: '' }); draw(); } }, '+ Tambah lokasi'));
         };
         draw();
         return box;
     }
-    function bulkBar() {
+    let bulkCount = null;
+    function bulkBar(nBaru) {
         const f = {};
-        const js = h('select', {}, h('option', { value: '' }, '(jenis)'), ...JENIS.map(j => h('option', {}, j)));
-        const mt = h('select', {}, h('option', { value: '' }, '(metode)'), ...METODE.map(j => h('option', {}, j)));
-        const pd = h('select', {}, h('option', { value: '' }, '(pra-DIPA)'), h('option', { value: '1' }, 'Pra-DIPA: ya'), h('option', { value: '0' }, 'Pra-DIPA: tidak'));
-        const months = ['awalPengadaan', 'akhirPengadaan', 'awalPekerjaan', 'akhirPekerjaan', 'awalKebutuhan', 'kebutuhan'].map(k => { const i = h('input', { type: 'month', title: k }); f[k] = i; return i; });
-        const copyLok = h('button', { class: 'btn sm', title: 'Salin lokasi paket terpilih pertama ke paket terpilih lain' }, 'Samakan lokasi');
-        const apply = h('button', { class: 'btn sm pri' }, 'Terapkan ke paket terpilih');
-        const all = h('button', { class: 'btn sm' }, 'Pilih semua paket baru');
-        const selected = () => [...document.querySelectorAll('.sdr-bulk-sel')].filter(c => c.checked).map(c => c._pk);
-        all.addEventListener('click', () => document.querySelectorAll('.sdr-bulk-sel').forEach(c => { if (c._pk.baru) c.checked = true; }));
+        const js = h('select', {}, h('option', { value: '' }, '— tidak diubah —'), ...JENIS.map(j => h('option', {}, j)));
+        const mt = h('select', {}, h('option', { value: '' }, '— tidak diubah —'), ...METODE.map(j => h('option', {}, j)));
+        const pd = h('select', {}, h('option', { value: '' }, '— tidak diubah —'), h('option', { value: '1' }, 'Ya'), h('option', { value: '0' }, 'Tidak'));
+        const mon = k => { const i = h('input', { type: 'month' }); f[k] = i; return i; };
+        const rng = (a, b) => h('div', { class: 'range' }, mon(a), h('span', {}, 's.d.'), mon(b));
+        const field = (label, input) => h('div', { class: 'field' }, h('label', {}, label), input);
+        const sel = () => [...document.querySelectorAll('.sdr-bulk-sel')].filter(c => c.checked).map(c => c._pk);
+        const info = h('b', {}, '0 paket dipilih');
+        bulkCount = () => { info.textContent = `${sel().length} dari ${nBaru} paket baru dipilih`; };
+        const apply = h('button', { class: 'btn pri' }, 'Terapkan ke paket terpilih');
         apply.addEventListener('click', () => {
-            const ps = selected(); if (!ps.length) return;
+            const ps = sel(); if (!ps.length) { log('Pilih paket dulu (centang di kiri tiap paket).', 'w'); return; }
             for (const pk of ps) {
                 if (js.value) { pk.jenis = js.value; pk.jenisList = null; }
                 if (mt.value) pk.metode = mt.value;
                 if (pd.value) pk.praDipa = pd.value === '1';
                 for (const [k, i] of Object.entries(f)) if (i.value) pk.jadwal[k] = i.value;
             }
-            log(`Isian massal diterapkan ke ${ps.length} paket.`); go(3);
+            log(`Isian massal diterapkan ke ${ps.length} paket.`, 'o'); go(3);
         });
+        const copyLok = h('button', { class: 'btn', title: 'Salin lokasi paket terpilih pertama ke paket terpilih lainnya' }, 'Samakan lokasi');
         copyLok.addEventListener('click', () => {
-            const ps = selected(); if (ps.length < 2) return;
+            const ps = sel(); if (ps.length < 2) { log('Pilih minimal 2 paket; lokasi paket pertama disalin ke yang lain.', 'w'); return; }
             for (const pk of ps.slice(1)) pk.lokasiRaw = ps[0].lokasiRaw.map(l => ({ ...l, id: '' }));
-            log(`Lokasi disalin ke ${ps.length - 1} paket.`); go(3);
+            log(`Lokasi disalin ke ${ps.length - 1} paket.`, 'o'); go(3);
         });
-        return h('div', { class: 'bulk' }, h('div', { class: 'row' }, h('b', {}, 'Isian massal:'), js, mt, pd,
-            h('span', { class: 'muted' }, 'pemilihan'), months[0], months[1], h('span', { class: 'muted' }, 'kontrak'), months[2], months[3], h('span', { class: 'muted' }, 'pemanfaatan'), months[4], months[5],
-            apply, copyLok, all));
+        const box = h('div', { class: 'bulk' },
+            h('div', { class: 'row' }, h('h3', { style: { margin: 0 } }, 'Isian massal'), h('span', { class: 'muted' }, '— isi hanya kolom yang ingin diseragamkan, lalu terapkan ke paket yang dicentang.')),
+            h('div', { class: 'formgrid' }, field('Jenis pengadaan', js), field('Metode pemilihan', mt), field('Pra-DIPA', pd)),
+            h('div', { class: 'rangegrid' }, field('Pemilihan penyedia', rng('awalPengadaan', 'akhirPengadaan')), field('Pelaksanaan kontrak', rng('awalPekerjaan', 'akhirPekerjaan')), field('Pemanfaatan barang/jasa', rng('awalKebutuhan', 'kebutuhan'))),
+            h('div', { class: 'row' }, info,
+                h('button', { class: 'btn sm', onclick: () => { document.querySelectorAll('.sdr-bulk-sel').forEach(c => { c.checked = true; }); bulkCount(); } }, 'Pilih semua'),
+                h('button', { class: 'btn sm', onclick: () => { document.querySelectorAll('.sdr-bulk-sel').forEach(c => { c.checked = false; }); bulkCount(); } }, 'Kosongkan'),
+                h('span', { style: { flex: 1 } }), copyLok, apply));
+        setTimeout(bulkCount, 0);
+        return box;
     }
 
     function validatePaket(pk) {
@@ -2084,7 +2269,8 @@ const UI = (() => {
 
     function mount() {
         if (document.querySelector('.sdr-fab')) return;
-        const style = document.createElement('style'); style.textContent = CSS; document.head.append(style);
+        document.querySelectorAll('style[data-sdr]').forEach(e => e.remove()); // CSS versi lama (upgrade tanpa muat ulang)
+        const style = document.createElement('style'); style.dataset.sdr = APP_VERSION; style.textContent = CSS; document.head.append(style);
         document.body.append(h('button', { class: 'sdr-fab', onclick: open, title: APP }, '⇄ ', APP));
     }
     return { mount, open, S };
