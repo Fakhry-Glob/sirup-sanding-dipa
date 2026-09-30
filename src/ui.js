@@ -370,6 +370,7 @@ const UI = (() => {
                     pk.jenisList = donor.jenisRaw.length === 1 ? null : donor.jenisRaw.map(j => ({ ...j }));
                     pk.jenis = Object.keys(Sirup.JENIS_ID).find(k => Sirup.JENIS_ID[k] === (donor.jenisRaw[0] || {}).jenisid) || pk.jenis;
                     pk.spp = donor.spp; pk.volume = donor.volume;
+                    if (pk.pertahankan) { pk.uraian = donor.uraianRaw || pk.uraian; pk.spesifikasi = donor.spesifikasiRaw || pk.spesifikasi; }
                     pk.jadwal = { awalPengadaan: donor.tanggal.awalPengadaan, akhirPengadaan: donor.tanggal.akhirPengadaan, awalPekerjaan: donor.tanggal.awalPekerjaan, akhirPekerjaan: donor.tanggal.akhirPekerjaan,
                         awalKebutuhan: Analysis.ym(donor.pemanfaatan && donor.pemanfaatan.mulai) || donor.tanggal.awalPekerjaan, kebutuhan: Analysis.ym(donor.pemanfaatan && donor.pemanfaatan.akhir) || donor.tanggal.akhirPekerjaan };
                     const used = new Set();
@@ -471,6 +472,12 @@ const UI = (() => {
         const upd = () => { ringkas.textContent = `${pk.jenis} · ${pk.metode} · pemilihan ${pk.jadwal.awalPengadaan || '?'} · ${pk.lokasiRaw.length} lokasi · ${pk.anggaran.length} MAK`; };
         upd();
         const tog = h('button', { class: 'btn sm' }, '▸ isian');
+        if (pk.pertahankan) {
+            title.disabled = true;
+            hd.append(h('span', { class: 'muted', style: { fontSize: '12px' } }, 'paket existing — dikirim apa adanya dari form SiRUP, tidak diubah'));
+            el.append(hd);
+            return el;
+        }
         hd.append(ringkas, tog);
         if (idx > 0) hd.append(h('button', { class: 'btn sm', title: 'Buang paket ini dari revisi', onclick: () => { act.pakets.splice(idx, 1); go(3); } }, '✕'));
         const bd = h('div', { class: 'pk-bd', style: { display: 'none' } });
@@ -591,6 +598,7 @@ const UI = (() => {
 
     function validatePaket(pk) {
         const err = [];
+        if (pk.pertahankan) { for (const a of pk.anggaran) a.idKomponen = a.idKomponen || komponenId(a.mak); return err; }
         if (!pk.nama || pk.nama.length < 5) err.push('nama paket terlalu pendek');
         const tot = pk.anggaran.reduce((s, a) => s + (+a.pagu || 0), 0);
         if (tot <= 0) err.push('pagu 0');

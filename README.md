@@ -28,7 +28,8 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 ## Perilaku SiRUP yang perlu diketahui (hasil rekaman 30 Sep 2026)
 
 - Revisi 1→N: `kajiulangpaket?jenis=satukebanyak` → satu `POST simpankajiulangonetomanypenyedia` per paket hasil (`isSelesai=true` pada paket terakhir). **Paket asal hilang dari daftar, dan semua paket hasil berstatus Final Draft** sampai diumumkan KPA. Tool langsung mengumumkannya.
-- KPA tidak bisa membuat paket baru. Paket baru "dititipkan" pada revisi 1→N paket donor terumumkan yang kecil dan sudah benar (paket #1 = donor, tidak diubah).
+- KPA bisa **membatalkan**, **revisi 1→1**, dan **revisi 1→N**, tetapi tidak bisa membuat paket dari nol. Trik membuat paket tanpa akun PPK: revisi 1→N atas paket existing. **Draft #1 dibiarkan apa adanya** (tool mengirim isi form SiRUP yang sudah terisi otomatis, hasil serialisasi identik dengan FormData browser), lalu draft #2 dst. diisi sebagai paket baru. Form yang sama menjadi template, sehingga field tersembunyi yang tidak dikenal tetap ikut terkirim.
+- Koreksi satu paket (pindah MAK, kurangi pagu, keluarkan baris NP, perbaiki dana) memakai revisi **1→1**. Payload-nya menunggu rekaman demo; sebelum itu eksekusi 1→1 belum aktif.
 - MAK paket = `id_komponen` (id node Komponen PKKR) + teks `SUB.AKUN`. Karena itu cabang PKKR harus ada terlebih dahulu.
 - Node PKKR hasil integrasi terkunci (nama/kode/pagu readonly), hanya PPK-nya yang bisa diubah.
 

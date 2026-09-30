@@ -248,8 +248,8 @@ const Analysis = (() => {
             const chunk = baru.slice(i, i + per);
             if (!donor) { actions.push({ type: 'TANPA_DONOR', pilih: false, pakets: chunk }); continue; }
             actions.push({ type: 'REVISI', metodeRevisi: 'satukebanyak', donorId: donor.id, alasan: 'Penambahan paket sesuai DIPA revisi terakhir', pilih: true,
-                catatan: [`Paket #1 = paket donor ${donor.id} (isinya tidak diubah); paket #2 dst. adalah paket baru`],
-                pakets: [paketDari(donor, donor.sumberDana.filter(s => s.pagu).map(s => ({ mak: s.mak, pagu: s.pagu })), akunMap, cfg), ...chunk] });
+                catatan: [`Paket #1 = paket existing ${donor.id}, dikirim persis seperti form SiRUP (tidak diubah); paket #2 dst. adalah paket baru`],
+                pakets: [Object.assign(paketDari(donor, donor.sumberDana.filter(s => s.pagu).map(s => ({ mak: s.mak, pagu: s.pagu, danaApbn: s.danaApbn })), akunMap, cfg), { pertahankan: true }), ...chunk] });
         }
 
         // f. cabang PKKR yang perlu ditambah (hanya yang memuat pagu pengadaan)

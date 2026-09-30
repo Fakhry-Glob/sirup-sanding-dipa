@@ -180,6 +180,7 @@ const Sirup = (() => {
         const jd = k => { const t = h[k]; return Array.isArray(t) && t[1] ? { mulai: t[1][0], akhir: t[1][1] } : null; };
         return Object.assign(p, {
             nama: j.nama || p.nama,
+            uraianRaw: j.keterangan || '', spesifikasiRaw: j.spesifikasi || '',
             uraian: (j.keterangan || '').replace(/\t+/g, ' ').replace(/ {2,}/g, ' ').trim(),
             spesifikasi: (j.spesifikasi || '').replace(/\t+/g, ' ').replace(/ {2,}/g, ' ').trim(),
             volume: j.volume || '1 Paket',
@@ -298,31 +299,103 @@ const Sirup = (() => {
         return f;
     }
 
+    // Serialisasi form revisi SiRUP persis seperti browser mengirimnya (field bernama, tidak disabled,
+    // checkbox/radio hanya yang tercentang, select = opsi terpilih). Form ini sudah terisi otomatis
+    // dengan data paket existing, sehingga bisa dipakai apa adanya ("dibiarkan saja") atau sebagai template.
+    function serializeForm(html) {
+        const d = new DOMParser().parseFromString(html, 'text/html');
+        const form = [...d.querySelectorAll('form')].find(f => /simpankajiulang/i.test(f.getAttribute('action') || ''));
+        if (!form) return null;
+        const entries = [];
+        for (const el of form.querySelectorAll('input, select, textarea')) {
+            const name = el.getAttribute('name');
+            if (!name || el.hasAttribute('disabled')) continue;
+            const tag = el.tagName.toLowerCase(), type = (el.getAttribute('type') || 'text').toLowerCase();
+            if (tag === 'input' && ['submit', 'button', 'file', 'image', 'reset'].includes(type)) continue;
+            if (tag === 'input' && (type === 'checkbox' || type === 'radio')) {
+                if (el.hasAttribute('checked')) entries.push([name, el.getAttribute('value') ?? 'on']);
+                continue;
+            }
+            if (tag === 'select') {
+                const opts = [...el.querySelectorAll('option')];
+                const sel = el.hasAttribute('multiple') ? opts.filter(o => o.hasAttribute('selected')) : [opts.find(o => o.hasAttribute('selected')) || opts[0]].filter(Boolean);
+                for (const o of sel) entries.push([name, o.getAttribute('value') ?? o.textContent.trim()]);
+                continue;
+            }
+            entries.push([name, tag === 'textarea' ? el.textContent : (el.getAttribute('value') ?? '')]);
+        }
+        return { action: form.getAttribute('action'), entries };
+    }
+    const ARRAY_FIELD = /^(paketLokasi|paketAnggaran|paketJenis|paketKbki)\[\d+\]/;
+    const KONTROL = ['count', 'isSelesai', 'alasan', 'idTerkaji', 'idAwal'];
+
+    // Gabungkan template form dengan payload kita.
+    //  - pk.pertahankan (paket #1 = paket existing): kirim isi form apa adanya, hanya kontrol alur yang diisi.
+    //  - paket baru: pakai payload kita, lalu tambahkan field template yang tidak kita kenal (bukan larik).
+    function gabungPayload(tpl, ours, pk) {
+        const f = new URLSearchParams();
+        const kita = new Map();
+        for (const [k, v] of ours) if (!kita.has(k)) kita.set(k, v);
+        if (pk.pertahankan && tpl) {
+            const adaAnggaran = tpl.entries.some(([k]) => /^paketAnggaran\[0\]\.mak$/.test(k));
+            // buang baris larik "cetakan" yang seluruh nilainya kosong (baris tambah lokasi/dana di form)
+            const grup = {};
+            for (const [k, v] of tpl.entries) { const m = k.match(ARRAY_FIELD); if (m) { grup[m[0]] = grup[m[0]] || []; if (!/\.id$/.test(k)) grup[m[0]].push(v); } }
+            const kosong = new Set(Object.entries(grup).filter(([, vs]) => vs.every(v => !String(v).trim())).map(([g]) => g));
+            for (const [k, v] of tpl.entries) {
+                const m = k.match(ARRAY_FIELD);
+                if (m && kosong.has(m[0])) continue;
+                if (KONTROL.includes(k)) continue;
+                if (!adaAnggaran && ARRAY_FIELD.test(k)) continue;
+                f.append(k, v);
+            }
+            if (!adaAnggaran) for (const [k, v] of ours) if (ARRAY_FIELD.test(k)) f.append(k, v); // larik diisi JS di browser → pakai data paket existing
+            for (const k of KONTROL) f.set(k, kita.get(k) ?? '');
+            return f;
+        }
+        for (const [k, v] of ours) f.append(k, v);
+        if (tpl) for (const [k, v] of tpl.entries) if (!kita.has(k) && !ARRAY_FIELD.test(k) && !KONTROL.includes(k)) f.append(k, v);
+        return f;
+    }
+
+    async function bacaError(r) {
+        const body = await r.text();
+        const msg = (body.match(/class="alert[^"]*"[^>]*>([\s\S]*?)<\/div>/) || [])[1];
+        return msg ? msg.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '';
+    }
+
+    // Trik KPA membuat paket tanpa akun PPK: revisi satu-ke-banyak atas paket existing.
+    // Paket #1 = paket existing dibiarkan apa adanya; paket #2 dst. = paket baru.
     async function revisiSatuKeBanyak(ctx, donor, pakets, alasan, { onStep, dryRun } = {}) {
-        const payloads = pakets.map((pk, i) => payloadPaket(ctx, donor, pk, i + 1, i === pakets.length - 1, alasan));
-        if (dryRun) return { payloads };
+        const ours = pakets.map((pk, i) => payloadPaket(ctx, donor, pk, i + 1, i === pakets.length - 1, alasan));
+        if (dryRun) return { payloads: ours.map((o, i) => gabungPayload(null, o, pakets[i])) };
         const before = new Set((await daftarPaket(ctx.tahun)).map(p => p.id));
         const r0 = await get(`${BASE}/rup/kajiulangpaket?id=${donor.id}&penyediaAtauSwakelola=penyedia&jenisMtl=&jenis=satukebanyak`);
         if (!/formkajiulangsatukebanyak/.test(r0.url)) throw new Error('SiRUP tidak membuka form revisi satu ke banyak (URL: ' + r0.url + ')');
-        for (let i = 0; i < payloads.length; i++) {
-            const r = await post(`${BASE}/revisictr/simpankajiulangonetomanypenyedia`, payloads[i]);
-            const expect = i === payloads.length - 1 ? /\/rup\/penyedia/ : new RegExp(`count=${i + 2}`);
-            if (!expect.test(r.url)) {
-                const body = await r.text();
-                const msg = (body.match(/class="alert[^"]*"[^>]*>([\s\S]*?)<\/div>/) || [])[1];
-                throw new Error(`Paket #${i + 1} ditolak SiRUP${msg ? ': ' + msg.replace(/<[^>]+>/g, ' ').trim() : ''} (URL ${r.url})`);
+        let tpl = serializeForm(await r0.text());
+        if (!tpl) log('Form revisi tidak terbaca; payload disusun dari data paket.', 'w');
+        const terkirim = [];
+        for (let i = 0; i < ours.length; i++) {
+            const body = gabungPayload(tpl, ours[i], pakets[i]);
+            terkirim.push(body);
+            const r = await post(`${BASE}/revisictr/simpankajiulangonetomanypenyedia`, body);
+            const last = i === ours.length - 1;
+            if (!(last ? /\/rup\/penyedia/ : new RegExp(`count=${i + 2}`)).test(r.url)) {
+                const msg = await bacaError(r);
+                throw new Error(`Paket #${i + 1} ditolak SiRUP${msg ? ': ' + msg : ''} (URL ${r.url}). Paket #1–#${i} sudah tersimpan; cek daftar paket sebelum mengulang.`);
             }
-            if (onStep) onStep(i + 1, payloads.length);
+            if (!last) tpl = serializeForm(await r.text()) || tpl; // form berikutnya (count+1) jadi template
+            if (onStep) onStep(i + 1, ours.length);
             await sleep(400);
         }
         const after = await daftarPaket(ctx.tahun);
         const baru = after.filter(p => !before.has(p.id));
-        return { baru, donorHilang: !after.some(p => p.id === donor.id) };
+        return { baru, donorHilang: !after.some(p => p.id === donor.id), terkirim };
     }
 
     return {
         context, crawlPkkr, tambahPkkr, cariNodeBaru, daftarPpk, daftarPaket, detailPaket, denorm, kabupaten, alasanUmkm,
-        strukturAnggaran, simpanStrukturAnggaran, umumkan, batalFinalDraft, batalkanPaket, revisiSatuKeBanyak, payloadPaket,
+        strukturAnggaran, simpanStrukturAnggaran, umumkan, batalFinalDraft, batalkanPaket, revisiSatuKeBanyak, payloadPaket, serializeForm, gabungPayload,
         setLogger, JENIS_ID, METODE_ID, PROVINSI, isLoginPage, sleep,
     };
 })();
