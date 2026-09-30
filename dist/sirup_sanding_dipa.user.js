@@ -671,7 +671,8 @@ const Analysis = (() => {
             // tidak ada yang berubah (kelebihan akun sudah habis ditangani paket lain) → lewati
             const sig = xs => xs.map(r => `${r.mak}|${Math.round(r.pagu)}|${r.danaApbn || 'A'}`).sort().join(';');
             if (!catatan.length && sig(anggaran) === sig((p.sumberDana || []).filter(x => x.pagu))) continue;
-            actions.push({ type: 'REVISI', donorId: p.id, alasan, catatan, pilih: !perluKeputusan, pakets: [paketDari(p, anggaran, akunMap, cfg)] });
+            // koreksi satu paket → revisi Satu ke Satu (paket baru dititipkan terpisah lewat Satu ke Banyak)
+            actions.push({ type: 'REVISI', metodeRevisi: 'satukesatu', donorId: p.id, alasan, catatan, pilih: !perluKeputusan, pakets: [paketDari(p, anggaran, akunMap, cfg)] });
         }
 
         // e. paket baru untuk sisa pagu pengadaan yang belum terumumkan,
@@ -688,7 +689,7 @@ const Analysis = (() => {
             const donor = donors.shift();
             const chunk = baru.slice(i, i + per);
             if (!donor) { actions.push({ type: 'TANPA_DONOR', pilih: false, pakets: chunk }); continue; }
-            actions.push({ type: 'REVISI', donorId: donor.id, alasan: 'Penambahan paket sesuai DIPA revisi terakhir', pilih: true,
+            actions.push({ type: 'REVISI', metodeRevisi: 'satukebanyak', donorId: donor.id, alasan: 'Penambahan paket sesuai DIPA revisi terakhir', pilih: true,
                 catatan: [`Paket #1 = paket donor ${donor.id} (isinya tidak diubah); paket #2 dst. adalah paket baru`],
                 pakets: [paketDari(donor, donor.sumberDana.filter(s => s.pagu).map(s => ({ mak: s.mak, pagu: s.pagu })), akunMap, cfg), ...chunk] });
         }
@@ -938,8 +939,10 @@ const Sirup = (() => {
         const r = rows.find(x => String(x[2]).trim() === kode);
         return r ? String(r[0]) : null;
     }
-    async function daftarPpk() {
-        const h = await getText(`${BASE}/programctr/formsubkomponen?idKomponen=0`).catch(() => '');
+    // daftar PPK diambil dari form sub komponen; idKomponen harus id nyata (0 → HTTP 500)
+    async function daftarPpk(idKomponen) {
+        if (!idKomponen) return [];
+        const h = await getText(`${BASE}/programctr/formsubkomponen?idKomponen=${idKomponen}`).catch(() => '');
         return [...h.matchAll(/<option value="(\d+)"\s*>([^<]+)<\/option>/g)].map(m => ({ id: m[1], nama: m[2].trim() }));
     }
 
@@ -1351,7 +1354,7 @@ const UI = (() => {
         if (S.pkkr && !force) return;
         log('Membaca pohon PKKR SiRUP…');
         S.pkkr = await Sirup.crawlPkkr(S.ctx.tahun);
-        if (!S.ppk.length) S.ppk = await Sirup.daftarPpk();
+        if (!S.ppk.length) S.ppk = await Sirup.daftarPpk(([...S.pkkr.values()].find(n => n.level === 'komp') || {}).id);
         log(`PKKR terbaca: ${S.pkkr.size} node.`, 'o');
         S.an = null;
     }
@@ -1572,7 +1575,8 @@ const UI = (() => {
         const donor = a.donor;
         const box = h('div', { class: 'pk', style: { borderColor: a.pilih ? '#94a3b8' : '#fcd34d' } });
         box.append(h('div', { class: 'pk-hd' }, chk(a.pilih, v => { a.pilih = v; box.style.borderColor = v ? '#94a3b8' : '#fcd34d'; }),
-            h('b', {}, `Donor ${a.donorId}`), h('span', {}, donor ? donor.nama : ''), pill(donor ? Analysis.ST[donor.status] : '', 'p-mut'), h('span', { class: 'muted' }, a.alasan),
+            pill(a.metodeRevisi === 'satukesatu' ? 'Revisi 1→1' : 'Revisi 1→N', a.metodeRevisi === 'satukesatu' ? 'p-info' : 'p-ok'),
+            h('b', {}, `${a.metodeRevisi === 'satukesatu' ? 'Paket' : 'Donor'} ${a.donorId}`), h('span', {}, donor ? donor.nama : ''), pill(donor ? Analysis.ST[donor.status] : '', 'p-mut'), h('span', { class: 'muted' }, a.alasan),
             h('span', { style: { marginLeft: 'auto' } }, `${a.pakets.length} paket hasil · Rp${fmt(a.pakets.reduce((s, p) => s + p.anggaran.reduce((t, x) => t + x.pagu, 0), 0))}`)));
         if (a.catatan && a.catatan.length) box.append(h('div', { class: 'warnbox', style: { margin: '6px 10px' } }, ...a.catatan.map(c => h('div', {}, '• ' + c))));
         a.pakets.forEach((pk, i) => box.append(paketEditor(a, pk, i)));
@@ -1588,7 +1592,7 @@ const UI = (() => {
         const total = h('b', {});
         const refreshTotal = () => { total.textContent = 'Rp' + fmt(pk.anggaran.reduce((s, x) => s + (+x.pagu || 0), 0)); };
         const hd = h('div', { class: 'pk-hd', style: { background: pk.baru ? '#f0fdfa' : '#f8fafc', borderRadius: 0 } }, sel,
-            pill(idx === 0 ? (pk.baru ? 'Paket #1' : 'Paket #1 (menggantikan donor)') : `Paket baru #${idx + 1}`, pk.baru ? 'p-ok' : 'p-info'), title, total);
+            pill(act.metodeRevisi === 'satukesatu' ? 'Isi paket setelah revisi' : idx === 0 ? (pk.baru ? 'Paket #1' : 'Paket #1 (menggantikan donor)') : `Paket baru #${idx + 1}`, pk.baru ? 'p-ok' : 'p-info'), title, total);
         const ringkas = h('span', { class: 'muted', style: { fontSize: '12px' } });
         const upd = () => { ringkas.textContent = `${pk.jenis} · ${pk.metode} · pemilihan ${pk.jadwal.awalPengadaan || '?'} · ${pk.lokasiRaw.length} lokasi · ${pk.anggaran.length} MAK`; };
         upd();

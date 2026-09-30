@@ -228,7 +228,7 @@ const UI = (() => {
         if (S.pkkr && !force) return;
         log('Membaca pohon PKKR SiRUP…');
         S.pkkr = await Sirup.crawlPkkr(S.ctx.tahun);
-        if (!S.ppk.length) S.ppk = await Sirup.daftarPpk();
+        if (!S.ppk.length) S.ppk = await Sirup.daftarPpk(([...S.pkkr.values()].find(n => n.level === 'komp') || {}).id);
         log(`PKKR terbaca: ${S.pkkr.size} node.`, 'o');
         S.an = null;
     }
@@ -449,7 +449,8 @@ const UI = (() => {
         const donor = a.donor;
         const box = h('div', { class: 'pk', style: { borderColor: a.pilih ? '#94a3b8' : '#fcd34d' } });
         box.append(h('div', { class: 'pk-hd' }, chk(a.pilih, v => { a.pilih = v; box.style.borderColor = v ? '#94a3b8' : '#fcd34d'; }),
-            h('b', {}, `Donor ${a.donorId}`), h('span', {}, donor ? donor.nama : ''), pill(donor ? Analysis.ST[donor.status] : '', 'p-mut'), h('span', { class: 'muted' }, a.alasan),
+            pill(a.metodeRevisi === 'satukesatu' ? 'Revisi 1→1' : 'Revisi 1→N', a.metodeRevisi === 'satukesatu' ? 'p-info' : 'p-ok'),
+            h('b', {}, `${a.metodeRevisi === 'satukesatu' ? 'Paket' : 'Donor'} ${a.donorId}`), h('span', {}, donor ? donor.nama : ''), pill(donor ? Analysis.ST[donor.status] : '', 'p-mut'), h('span', { class: 'muted' }, a.alasan),
             h('span', { style: { marginLeft: 'auto' } }, `${a.pakets.length} paket hasil · Rp${fmt(a.pakets.reduce((s, p) => s + p.anggaran.reduce((t, x) => t + x.pagu, 0), 0))}`)));
         if (a.catatan && a.catatan.length) box.append(h('div', { class: 'warnbox', style: { margin: '6px 10px' } }, ...a.catatan.map(c => h('div', {}, '• ' + c))));
         a.pakets.forEach((pk, i) => box.append(paketEditor(a, pk, i)));
@@ -465,7 +466,7 @@ const UI = (() => {
         const total = h('b', {});
         const refreshTotal = () => { total.textContent = 'Rp' + fmt(pk.anggaran.reduce((s, x) => s + (+x.pagu || 0), 0)); };
         const hd = h('div', { class: 'pk-hd', style: { background: pk.baru ? '#f0fdfa' : '#f8fafc', borderRadius: 0 } }, sel,
-            pill(idx === 0 ? (pk.baru ? 'Paket #1' : 'Paket #1 (menggantikan donor)') : `Paket baru #${idx + 1}`, pk.baru ? 'p-ok' : 'p-info'), title, total);
+            pill(act.metodeRevisi === 'satukesatu' ? 'Isi paket setelah revisi' : idx === 0 ? (pk.baru ? 'Paket #1' : 'Paket #1 (menggantikan donor)') : `Paket baru #${idx + 1}`, pk.baru ? 'p-ok' : 'p-info'), title, total);
         const ringkas = h('span', { class: 'muted', style: { fontSize: '12px' } });
         const upd = () => { ringkas.textContent = `${pk.jenis} · ${pk.metode} · pemilihan ${pk.jadwal.awalPengadaan || '?'} · ${pk.lokasiRaw.length} lokasi · ${pk.anggaran.length} MAK`; };
         upd();

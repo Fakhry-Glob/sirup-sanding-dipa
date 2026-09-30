@@ -143,8 +143,10 @@ const Sirup = (() => {
         const r = rows.find(x => String(x[2]).trim() === kode);
         return r ? String(r[0]) : null;
     }
-    async function daftarPpk() {
-        const h = await getText(`${BASE}/programctr/formsubkomponen?idKomponen=0`).catch(() => '');
+    // daftar PPK diambil dari form sub komponen; idKomponen harus id nyata (0 → HTTP 500)
+    async function daftarPpk(idKomponen) {
+        if (!idKomponen) return [];
+        const h = await getText(`${BASE}/programctr/formsubkomponen?idKomponen=${idKomponen}`).catch(() => '');
         return [...h.matchAll(/<option value="(\d+)"\s*>([^<]+)<\/option>/g)].map(m => ({ id: m[1], nama: m[2].trim() }));
     }
 

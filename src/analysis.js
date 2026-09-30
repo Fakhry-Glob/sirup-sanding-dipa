@@ -229,7 +229,8 @@ const Analysis = (() => {
             // tidak ada yang berubah (kelebihan akun sudah habis ditangani paket lain) → lewati
             const sig = xs => xs.map(r => `${r.mak}|${Math.round(r.pagu)}|${r.danaApbn || 'A'}`).sort().join(';');
             if (!catatan.length && sig(anggaran) === sig((p.sumberDana || []).filter(x => x.pagu))) continue;
-            actions.push({ type: 'REVISI', donorId: p.id, alasan, catatan, pilih: !perluKeputusan, pakets: [paketDari(p, anggaran, akunMap, cfg)] });
+            // koreksi satu paket → revisi Satu ke Satu (paket baru dititipkan terpisah lewat Satu ke Banyak)
+            actions.push({ type: 'REVISI', metodeRevisi: 'satukesatu', donorId: p.id, alasan, catatan, pilih: !perluKeputusan, pakets: [paketDari(p, anggaran, akunMap, cfg)] });
         }
 
         // e. paket baru untuk sisa pagu pengadaan yang belum terumumkan,
@@ -246,7 +247,7 @@ const Analysis = (() => {
             const donor = donors.shift();
             const chunk = baru.slice(i, i + per);
             if (!donor) { actions.push({ type: 'TANPA_DONOR', pilih: false, pakets: chunk }); continue; }
-            actions.push({ type: 'REVISI', donorId: donor.id, alasan: 'Penambahan paket sesuai DIPA revisi terakhir', pilih: true,
+            actions.push({ type: 'REVISI', metodeRevisi: 'satukebanyak', donorId: donor.id, alasan: 'Penambahan paket sesuai DIPA revisi terakhir', pilih: true,
                 catatan: [`Paket #1 = paket donor ${donor.id} (isinya tidak diubah); paket #2 dst. adalah paket baru`],
                 pakets: [paketDari(donor, donor.sumberDana.filter(s => s.pagu).map(s => ({ mak: s.mak, pagu: s.pagu })), akunMap, cfg), ...chunk] });
         }
