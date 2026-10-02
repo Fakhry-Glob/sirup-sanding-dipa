@@ -180,6 +180,68 @@ const Sirup = (() => {
         const pick = (manual.length ? manual : rows).sort((a, b) => Number(b[0]) - Number(a[0]))[0];
         return String(pick[0]);
     }
+    // ── PKKR Manual: ubah & nonaktifkan (form dibaca dari SiRUP saat eksekusi) ──
+    // Pola tautan dari halaman Kelola PKKR SiRUP; node Integrasi tidak punya tombol ini (terkunci).
+    const PKKR_FORM = {
+        prog: { edit: 'programctr/editProgram?idProgram=', hapus: 'programctr/deleteProgramConfirm?id=', prefix: 'program' },
+        keg: { edit: 'programctr/editKegiatan?idKegiatan=', hapus: 'programctr/deleteKegiatanConfirm?id=', prefix: 'kegiatan' },
+        kro: { edit: 'programctr/editOutput?id=', hapus: 'programctr/deleteOutputConfirm?id=', prefix: 'output' },
+        ro: { edit: 'programctr/editSubOutput?id=', hapus: 'programctr/deleteSubOutputConfirm?id=', prefix: 'suboutput' },
+        komp: { edit: 'programctr/editKomponen?id=', hapus: 'programctr/deleteKomponenConfirm?id=', prefix: 'komponen' },
+        sub: { edit: 'programctr/editSubKomponen?id=', hapus: 'programctr/deleteSubKomponenConfirm?id=', prefix: 'subkomponen' },
+    };
+    const nilaiForm = (f, k) => (f.entries.find(([n]) => n === k) || [])[1];
+    async function bacaFormPkkr(node) {
+        const F = PKKR_FORM[node.level];
+        const f = formDari(await getText(`${BASE}/${F.edit}${node.id}`), /programctr\/simpan/i);
+        if (!f) throw new Error(`Form ubah ${node.key} tidak terbuka.`);
+        return { F, f };
+    }
+    // Ubah nama/pagu node Manual: kirim form Ubah SiRUP apa adanya, hanya nama/pagu (dan alasan bila kosong) yang diganti
+    async function ubahPkkr(node, { nama, pagu, alasan }) {
+        const { F, f } = await bacaFormPkkr(node);
+        const roNama = f.entries.some(([k]) => k === `${F.prefix}.nama`) ? null : 'tidak ada';
+        if (roNama) throw new Error(`Form ubah ${node.key} tidak memuat isian nama — node mungkin node Integrasi.`);
+        const body = new URLSearchParams();
+        for (const [k, v] of f.entries) {
+            if (k === `${F.prefix}.nama` && nama != null) body.append(k, nama);
+            else if (k === `${F.prefix}.pagu` && pagu != null) body.append(k, String(Math.round(pagu)));
+            else if (k === `${F.prefix}.alasan` && !v) body.append(k, alasan || 'Penyesuaian dengan DIPA revisi terakhir');
+            else body.append(k, v);
+        }
+        const r = await post(f.action, body);
+        if (!r.redirected) throw new Error(`Perubahan ${node.key} ditolak: ${await pesanError(r)}`);
+        const cek = (await bacaFormPkkr(node)).f;   // verifikasi dari form yang sama
+        const pg = +nilaiForm(cek, `${F.prefix}.pagu`) || 0, nm = nilaiForm(cek, `${F.prefix}.nama`) || '';
+        if ((pagu != null && Math.abs(pg - Math.round(pagu)) > 1) || (nama != null && nm.trim() !== nama.trim()))
+            throw new Error(`SiRUP tidak menyimpan perubahan ${node.key} (terbaca: ${nm} · Rp${pg}). ${await bacaFlash(`${BASE}/${PKKR_FORM[node.level].edit}${node.id}`)}`);
+        return { nama: nm, pagu: pg };
+    }
+    // Nonaktifkan node Manual: buka dialog konfirmasi SiRUP, kirim form-nya (metode mengikuti form: GET bila tidak ditulis)
+    async function nonaktifkanPkkr(node) {
+        const F = PKKR_FORM[node.level];
+        const f = formDari(await getText(`${BASE}/${F.hapus}${node.id}`), /programctr\/delete/i);
+        if (!f) throw new Error(`Dialog nonaktifkan ${node.key} tidak terbuka (node mungkin node Integrasi).`);
+        const q = new URLSearchParams(f.entries);
+        if (f.method === 'post') { const r = await post(f.action, q); if (!r.redirected) throw new Error(`Nonaktifkan ${node.key} ditolak: ${await pesanError(r)}`); }
+        else {
+            const r = await getManual(f.action + (f.action.includes('?') ? '&' : '?') + q.toString());
+            if (!(r.type === 'opaqueredirect' || r.ok)) throw new Error(`Nonaktifkan ${node.key} gagal (HTTP ${r.status}).`);
+        }
+        return true;
+    }
+    // Paket yang sudah dibatalkan bisa diaktifkan lagi (revisi "aktif"); hasilnya Final Draft berkode sama
+    async function aktifkanPaket(id, alasan, jenis = 'penyedia') {
+        await getManual(`${BASE}/rup/kajiulangpaket?id=${id}&penyediaAtauSwakelola=${jenis}&jenisMtl=&jenis=aktif`);
+        const f = formDari(await getText(`${BASE}/rup/formkajiulangaktif?penyediaAtauSwakelola=${jenis}&id=${id}`), /kajiulangaktifkan/i);
+        if (!f) throw new Error(`Form aktifkan paket ${id} tidak terbuka (paket mungkin bukan berstatus Dibatalkan).`);
+        const body = new URLSearchParams(f.entries);
+        body.set('alasan', alasan || 'Pembatalan dibatalkan (diaktifkan kembali)');
+        const r = await post(f.action, body);
+        if (!r.redirected) throw new Error(`Aktifkan paket ${id} ditolak: ${await pesanError(r)}`);
+        return r;
+    }
+
     // daftar PPK diambil dari form sub komponen; idKomponen harus id nyata (0 → HTTP 500)
     async function daftarPpk(idKomponen) {
         if (!idKomponen) return [];
@@ -191,8 +253,10 @@ const Sirup = (() => {
     async function daftarPaket(tahun, jenis = 'penyedia') {
         const ep = jenis === 'penyedia' ? 'dataruppenyedia2018' : 'datarupswakelola2018';
         const rows = await dt(`${BASE}/datatablectr/${ep}?tahun=${tahun}`, '&status=');
+        // jalur komponen "2026.14564.DL.2376.FAN.ZZ1.ZZ1" ada di kolom 13 (penyedia) atau 12 (swakelola)
+        const jalur = r => (r.slice(10).map(String).find(x => /^20\d\d\.\d+\.[A-Z0-9]{2}\./.test(x)) || '').split('.').slice(2).join('.');
         return rows.map(r => ({ id: String(r[0]), jenisPaket: jenis, kegiatan: r[1] === 'N/A' ? r[11] : r[1], nama: r[2], pagu: +r[3] || 0, waktu: r[4],
-            sumber: r[5], aktif: r[6], fd: r[7], umumkan: r[8], status: String(r[9]), idClient: r[13], manual: r[13] === 'N/A' }));
+            sumber: r[5], aktif: r[6], fd: r[7], umumkan: r[8], status: String(r[9]), idClient: r[13], manual: r[13] === 'N/A', jalur: jalur(r) }));
     }
     async function denorm(id, tahun) {
         return post(`${BASE}/selfservice/paketpenyediadenormalisasibyid`, `id=${id}&tahunAnggaran=${tahun}`, { json: true });
@@ -390,9 +454,10 @@ const Sirup = (() => {
     // Serialisasi form revisi SiRUP persis seperti browser mengirimnya (field bernama, tidak disabled,
     // checkbox/radio hanya yang tercentang, select = opsi terpilih). Form ini sudah terisi otomatis
     // dengan data paket existing, sehingga bisa dipakai apa adanya ("dibiarkan saja") atau sebagai template.
-    function serializeForm(html) {
+    function serializeForm(html) { return formDari(html, /simpankajiulang/i); }
+    function formDari(html, actionRe) {
         const d = new DOMParser().parseFromString(html, 'text/html');
-        const form = [...d.querySelectorAll('form')].find(f => /simpankajiulang/i.test(f.getAttribute('action') || ''));
+        const form = [...d.querySelectorAll('form')].find(f => actionRe.test(f.getAttribute('action') || '') && !/loginctr/i.test(f.getAttribute('action') || ''));
         if (!form) return null;
         const entries = [];
         for (const el of form.querySelectorAll('input, select, textarea')) {
@@ -412,7 +477,7 @@ const Sirup = (() => {
             }
             entries.push([name, tag === 'textarea' ? el.textContent : (el.getAttribute('value') ?? '')]);
         }
-        return { action: form.getAttribute('action'), entries };
+        return { action: form.getAttribute('action'), method: (form.getAttribute('method') || 'get').toLowerCase(), entries };
     }
     const ARRAY_FIELD = /^(paketLokasi|paketAnggaran|paketJenis|paketKbki)\[\d+\]/;
     const KONTROL = ['count', 'isSelesai', 'alasan', 'idTerkaji', 'idAwal'];
@@ -502,6 +567,6 @@ const Sirup = (() => {
     return {
         context, crawlPkkr, tambahPkkr, cariNodeBaru, daftarPpk, daftarPaket, detailPaket, denorm, kabupaten, alasanUmkm, lengkapiKonteks, konteksLengkap, cariKabupaten,
         strukturAnggaran, simpanStrukturAnggaran, umumkan, batalFinalDraft, batalkanPaket, revisiSatuKeBanyak, revisiSatuKeSatu, payloadPaket, serializeForm, gabungPayload,
-        bacaFlash, getManual, setLogger, JENIS_ID, METODE_ID, PROVINSI, isLoginPage, sleep,
+        bacaFlash, getManual, setLogger, JENIS_ID, METODE_ID, PROVINSI, isLoginPage, sleep, formDari, ubahPkkr, nonaktifkanPkkr, aktifkanPaket, PKKR_FORM,
     };
 })();

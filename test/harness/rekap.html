@@ -26,9 +26,51 @@ window.pdfjsLib = { GlobalWorkerOptions: {} };
     const db = new Map(FIX.pakets.map(p => [p.id, JSON.parse(JSON.stringify(p))]));
     let seq = 69000000;
     Sirup.context = () => tunda({ login: true, nama: 'Uji KPA', role: 'PAKPA', satkerNama: FIX.dipa.meta.namaSatker, username: 'kpauji', tahun: 2026, idSatker: '14564', kodeSatker: '626402', isKPA: true });
-    Sirup.crawlPkkr = () => tunda(new Map(FIX.pkkr.map(n => [n.key, { ...n }])));
+    // PKKR tiruan + rantai Manual seperti test_pkkr.js (salinan induk, cabang RAA, node lama XQA/XQC)
+    const pkkrDb = new Map(FIX.pkkr.map(n => [n.key, JSON.parse(JSON.stringify(n))]));
+    const tambahManual = (key, level, id, parentId, nama, pagu) => {
+        const n = { id: String(id), level, kode: key.split('.').pop(), nama, pagu, key, manual: true, parentId: parentId && String(parentId) };
+        const ada = pkkrDb.get(key); if (ada && !ada.manual) ada.manualTwin = n; else pkkrDb.set(key, n);
+    };
+    if (!/tanpaManual/.test(location.search)) {
+        tambahManual('DL', 'prog', 2975030, null, 'Program Pendidikan dan Pelatihan Vokasi (Manual)', 64588069000);
+        tambahManual('DL.2376', 'keg', 14082821, 2975030, 'Pendidikan Kelautan dan Perikanan (Manual)', 64588069000);
+        tambahManual('DL.2376.RAA', 'kro', 2494727, 14082821, 'Sarana Bidang Pendidikan[Penambahan alokasi dari SABA 999.08 ke 9A]', 64588069000);
+        tambahManual('DL.2376.RAA.711', 'ro', 3380741, 2494727, 'Peralatan dan Mesin Pendidikan Kelautan dan Perikanan', 64588069000);
+        tambahManual('DL.2376.RAA.711.301', 'komp', 5422955, 3380741, 'Peralatan dan Mesin Pendidikan KP', 64588069000);
+        tambahManual('DL.2376.RAA.711.301.GA', 'sub', 12259865, 5422955, 'Peralatan Pendidikan (Tahap I)', 64588069000);
+        tambahManual('DL.2376.XQA', 'kro', 2500002, 14082821, 'KRO lama', 5000000);
+        tambahManual('DL.2376.XQA.001', 'ro', 3500002, 2500002, 'RO lama', 5000000);
+        tambahManual('DL.2376.XQC', 'kro', 2500004, 14082821, 'KRO lama dipakai swakelola', 3000000);
+    }
+    Sirup.crawlPkkr = () => tunda(new Map([...pkkrDb.entries()].map(([k, n]) => [k, JSON.parse(JSON.stringify(n))])));
+    window.pkkrDb = pkkrDb;
+    const manualDi = (key, id) => { const n = pkkrDb.get(key); return n && (n.manual ? n : n.manualTwin) && String((n.manual ? n : n.manualTwin).id) === String(id) ? (n.manual ? n : n.manualTwin) : null; };
+    Sirup.ubahPkkr = (node, { nama, pagu }) => {
+        catat('ubahPkkr', [node.key, nama, pagu]);
+        const m = manualDi(node.key, node.id);
+        if (!m) return Promise.reject(new Error(`node ${node.key} (${node.id}) tidak ditemukan`));
+        if (nama != null) m.nama = nama; if (pagu != null) m.pagu = Math.round(pagu);
+        return tunda({ nama: m.nama, pagu: m.pagu });
+    };
+    Sirup.nonaktifkanPkkr = node => {
+        catat('nonaktifkanPkkr', node.key);
+        const n = pkkrDb.get(node.key);
+        if (n && n.manual && String(n.id) === String(node.id)) pkkrDb.delete(node.key);
+        else if (n && n.manualTwin && String(n.manualTwin.id) === String(node.id)) delete n.manualTwin;
+        else return Promise.reject(new Error(`node ${node.key} tidak ditemukan`));
+        return tunda(true);
+    };
+    Sirup.aktifkanPaket = (id, al) => {
+        catat('aktifkan', [id, al]);
+        const p = db.get(String(id));
+        if (!p || p.status !== '51') return Promise.reject(new Error('paket bukan berstatus Dibatalkan'));
+        p.status = '2'; p.aktif = 'true';
+        return tunda({});
+    };
     Sirup.daftarPpk = () => tunda([]);
-    Sirup.daftarPaket = (t, jenis) => tunda(jenis === 'swakelola' ? [] : [...db.values()].map(p => ({ id: p.id, jenisPaket: 'penyedia', nama: p.nama, pagu: p.pagu, status: p.status, aktif: p.aktif })));
+    const SW = /tanpaManual/.test(location.search) ? [] : [{ id: '99000002', jenisPaket: 'swakelola', nama: 'Swakelola uji di KRO lama', pagu: 3000000, status: '3', aktif: 'true', jalur: 'DL.2376.XQC.002.051' }];
+    Sirup.daftarPaket = (t, jenis) => tunda(jenis === 'swakelola' ? SW.map(p => ({ ...p })) : [...db.values()].map(p => ({ id: p.id, jenisPaket: 'penyedia', nama: p.nama, pagu: p.pagu, status: p.status, aktif: p.aktif })));
     Sirup.detailPaket = p => tunda(Object.assign(p, JSON.parse(JSON.stringify(db.get(p.id) || {}))), 1);
     let SA = { id: '1', idSatker: '14564', barjas: 43707291000, modal: 25459000, sosial: 0, hibah: 0, lainnya: 0, diperbarui: '2026-07-01' };
     Sirup.strukturAnggaran = () => tunda({ ...SA });
@@ -43,7 +85,7 @@ window.pdfjsLib = { GlobalWorkerOptions: {} };
     const revisi = (asal, pks) => { const p = db.get(asal); p.status = '51'; const baru = pks.map(pk => { const id = String(++seq); db.set(id, { id, nama: pk.nama || p.nama, pagu: pk.anggaran.reduce((s, a) => s + a.pagu, 0), status: '2', aktif: 'true', sumberDana: pk.anggaran.map(a => ({ ...a, id: '' })) }); return { id, status: '2' }; }); return { baru, donorHilang: true, terkirim: [] }; };
     Sirup.umumkan = ids => { catat('umumkan', ids); ids.forEach(i => { const p = db.get(i); if (p) p.status = '3'; }); return tunda({}); };
     Sirup.batalFinalDraft = (id, al) => { catat('batalFD', [id, al]); db.get(id).status = '12'; return tunda({}); };
-    Sirup.batalkanPaket = (id, al) => { catat('batal', [id, al]); db.get(id).status = '51'; return tunda({}); };
+    Sirup.batalkanPaket = (id, al) => { catat('batal', [id, al]); db.get(id).status = '51'; db.get(id).aktif = 'false'; return tunda({}); };
     const asliSatu = Sirup.revisiSatuKeSatu, asliBanyak = Sirup.revisiSatuKeBanyak;
     Sirup.revisiSatuKeSatu = (ctx, asal, pk, al, o = {}) => o.dryRun ? asliSatu(ctx, asal, pk, al, o) : (catat('1-1', [asal.id, pk.anggaran]), tunda(revisi(asal.id, [pk])));
     Sirup.revisiSatuKeBanyak = (ctx, asal, pks, al, o = {}) => o.dryRun ? asliBanyak(ctx, asal, pks, al, o) : (catat('1-N', [asal.id, pks.length]), tunda(revisi(asal.id, pks)));
@@ -59,6 +101,11 @@ window.pdfjsLib = { GlobalWorkerOptions: {} };
         for (let i = 0; i < 100 && !document.querySelector('.proj'); i++) await tunda(null, 100);
         if (tab) [...document.querySelectorAll('.seg button')].find(b => b.textContent.startsWith(tab)).click();
         return 'siap';
+    };
+    window.keStep = async (i) => {
+        document.querySelectorAll('.sdr-step')[i].click();
+        await tunda(null, 400);
+        return 'ok';
     };
     window.addEventListener('error', e => { window.GALAT = (window.GALAT || []).concat(String(e.message)); });
     window.addEventListener('unhandledrejection', e => { window.GALAT = (window.GALAT || []).concat(String(e.reason && e.reason.message || e.reason)); });

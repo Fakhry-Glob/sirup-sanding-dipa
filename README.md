@@ -29,9 +29,9 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 | Langkah | Apa yang dilakukan | Mengubah SiRUP? |
 |---|---|---|
 | 1. Data & Login | Cek sesi login (role harus PAKPA/KPA), lalu unggah PDF **FA Detail 16 Segmen** dan/atau **Rincian Kertas Kerja Satker**. Parser memvalidasi jumlah item = total alokasi. | Tidak |
-| 2. Struktur PKKR | Membaca pohon Program › Kegiatan › KRO › RO › Komponen › Sub Komponen, lalu membandingkannya dengan DIPA. Cabang baru yang memuat belanja pengadaan bisa ditambahkan sebagai PKKR **Manual** (cabang gaji/non-pengadaan dilewati). | Ya, setelah konfirmasi |
+| 2. Struktur PKKR | Membaca pohon Program › Kegiatan › KRO › RO › Komponen › Sub Komponen, lalu membandingkannya dengan DIPA. Cabang baru yang memuat belanja pengadaan bisa ditambahkan sebagai PKKR **Manual** (cabang gaji/non-pengadaan dilewati). **Penyesuaian PKKR Manual** menyamakan pagu/nama node Manual dengan DIPA dan menonaktifkan node Manual yang tidak ada lagi di DIPA bila tidak dipakai paket. | Ya, setelah konfirmasi |
 | 3. Sanding RUP | Membaca seluruh paket (JSON `paketpenyediadenormalisasibyid` + modal detail), mengklasifikasi tiap item DIPA (Pengadaan / Non / Perlu cek), dan menyandingkan per MAK 7 segmen. Klasifikasi bisa diubah per item. | Tidak |
-| 4. Rekap & Eksekusi | Empat sub-langkah dengan proyeksi RUP (sekarang → setelah rencana → target pagu pengadaan DIPA) yang selalu tampil: **Putuskan** (kartu kebijakan per kelompok), **Perubahan paket** (satu paket = satu revisi, sebelum → sesudah), **Paket baru** (hanya MAK tanpa paket, dititipkan ke paket satu komponen), **Jalankan** (antrean yang memeriksa ulang SiRUP sebelum tiap langkah, bisa dijalankan satu per satu dan dilanjutkan). | Ya, setelah konfirmasi |
+| 4. Rekap & Eksekusi | Empat sub-langkah dengan proyeksi RUP (sekarang → setelah rencana → target pagu pengadaan DIPA) yang selalu tampil: **Putuskan** (kartu kebijakan per kelompok), **Pengajuan revisi** (daftar satu baris = satu pengajuan ke SiRUP; klik untuk popup isian pengajuan seperti form revisi SiRUP, ubah isian/alasan, atau ajukan satu pengajuan saja), **Paket baru** (hanya MAK tanpa paket, dititipkan ke paket satu komponen), **Jalankan** (antrean yang memeriksa ulang SiRUP sebelum tiap langkah, bisa dijalankan satu per satu dan dilanjutkan; paket yang dibatalkan bisa diaktifkan kembali). | Ya, setelah konfirmasi |
 | 5. Struktur Anggaran | Membaca **ulang** RUP terumumkan langsung dari SiRUP (daftar + baris anggaran tiap paket), lalu membandingkannya dengan struktur anggaran SiRUP dan pagu pengadaan DIPA per jenis belanja (52/53/57/56/lainnya). Sebelum menyimpan, RUP dibaca sekali lagi; bila berubah, penyimpanan dibatalkan dan tabel diperbarui. Setelah disimpan, IKU (RUP ÷ struktur anggaran) ditampilkan. | Ya, setelah konfirmasi |
 
 ## Aturan penting yang sudah ditanam
@@ -43,7 +43,7 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 - Ambang PL (Perpres 46/2025): barang/jasa lainnya Rp200 jt, konstruksi Rp400 jt, konsultansi Rp100 jt. Nilainya bisa diubah di ⚙.
 - Sumber dana (`id_dana_apbn`): A=RM, D=PNBP, F=BLU, T=SBSN, B=PLN. FA Detail tidak memuat SD, jadi satker multi-dana sebaiknya mengunggah RKK juga.
 
-## Logika rencana (src/rencana.js, v1.3.0)
+## Logika rencana (src/rencana.js)
 
 - **Kartu keputusan per kelompok, bukan per paket.** Jenis kartu:
   - MAK lama: paket yang MAK-nya tidak ada di DIPA, dikelompokkan per akun tujuan. Tujuannya akun berkode sama di kegiatan yang sama, dengan urutan komponen > RO > KRO > kode sub-komponen; huruf O dan angka 0 disamakan karena ada satker yang salah ketik. Opsinya:
@@ -58,6 +58,10 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 - **Aturan keputusan default:**
   - Kartu otomatis diputuskan bila selisihnya kecil. Kartu wajib diputuskan bila kelebihannya ≥ ambang keputusan (default Rp100 jt) atau padanan MAK-nya lemah (tujuan hanya sama kegiatan).
   - Selama kartu belum diputuskan, akun tujuannya **tidak dibuatkan paket baru**, supaya tidak dobel.
+- **Paket yang sudah tidak relevan (v1.4.0):**
+  - MAK lama tanpa padanan sama sekali (kegiatannya tidak punya akun berkode sama) bernilai di bawah ambang keputusan: default **dikeluarkan**. Paket terumumkan yang tinggal baris itu dibatalkan, dan final draft-nya dikembalikan ke PPK. Di atas ambang, kartunya wajib diputuskan.
+  - Final draft bermasalah default **dikembalikan ke PPK** bila jelas tidak relevan: seluruh barisnya non-pengadaan, tidak punya baris anggaran, atau kembar dengan paket terumumkan (MAK sama, pagu sama sampai Rp100 rb) **dan** MAK-nya sudah penuh. Dua paket sah bernilai sama di MAK yang masih longgar tetap diumumkan. Final draft lain (MAK "perlu dicek", MAK penuh tanpa kembaran) tetap menunggu keputusan.
+  - Paket asal revisi 1→1 hilang dari daftar KPA begitu revisinya tersimpan (rekaman 2 Okt 2026), jadi draf revisi tidak pernah dianggap kembar dengan paket asalnya.
 - **Menutup kekurangan pagu:**
   - Bila MAK sudah punya paket umum ("Belanja Bahan", nama akun, atau nama komponen), pagunya ditambah lewat revisi 1→1.
   - Bila tidak ada paket, atau paketnya spesifik, dibuat paket baru.
@@ -83,6 +87,25 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
   - Setelah antrean dijalankan, paket RUP **dibaca ulang otomatis** sebelum layar lain (rencana, struktur anggaran, Excel) dipakai.
     v1.3.0 tidak melakukan ini: di satker 653526 struktur anggaran sempat tersimpan dari data RUP sebelum revisi
     (barang/jasa Rp3.491.897.808, padahal RUP sesudah revisi Rp2.936,2 jt; diperbaiki di v1.3.1).
+  - Antrean disusun dari daftar pengajuan yang dicentang. "Ajukan sekarang" di popup mengirim satu pengajuan saja,
+    dengan pemeriksaan yang sama, dan mencatatnya di antrean ("diajukan satuan").
+  - Pembatalan yang sudah selesai bisa dibatalkan lewat **"Aktifkan kembali"**: revisi "Aktifkan" SiRUP
+    (`kajiulangpaket?jenis=aktif` → `formkajiulangaktif` → `POST /revisictr/kajiulangaktifkan`, kode RUP tetap,
+    status menjadi Final Draft), lalu langsung diumumkan ulang.
+
+## Penyesuaian PKKR Manual (src/pkkr.js, v1.4.0)
+
+- Hanya node **Manual** yang diubah. Node hasil integrasi SAKTI terkunci dan hanya ditampilkan sebagai informasi.
+- Pagu target:
+  - salinan induk rantai Manual (kode sama dengan node Integrasi, mis. Program "… (Manual)") = jumlah pagu cabang Manual di bawahnya;
+  - salinan tanpa anak Manual dan cabang Manual biasa = pagu DIPA node itu.
+- Nama: catatan SAKTI berbentuk "[…]" dibuang; cabang Manual mengikuti uraian DIPA; salinan Program/Kegiatan diberi akhiran "(Manual)".
+- Node Manual yang tidak ada lagi di DIPA dinonaktifkan **hanya bila tidak dipakai**:
+  - paket penyedia aktif yang baris anggarannya memakai id komponen di bawah node itu (atau MAK berawalan kode node, untuk cabang non-salinan);
+  - paket swakelola aktif yang jalur komponennya (kolom daftar paket) berada di bawah node itu.
+  Sebelum menonaktifkan, daftar paket dibaca ulang; bila berubah, detail paket dibaca ulang dulu. Tanpa paket RUP terbaca, tidak ada node yang bisa dinonaktifkan.
+- Urutan eksekusi: nonaktifkan (anak dulu) → turunkan pagu (anak dulu) → naikkan pagu / ganti nama (induk dulu).
+- Form "Ubah" dan dialog "Nonaktifkan" dibaca dari SiRUP saat eksekusi dan dikirim apa adanya; hanya nama/pagu (dan alasan bila kosong) yang diganti. Hasil ubah diverifikasi dengan membaca form lagi; hasil nonaktifkan diverifikasi dengan membaca ulang PKKR.
 - **Kelebihan RUP sekecil apa pun dipotong** (di atas Rp1.000), karena RUP di atas pagu DIPA membuat IKU > 100%, yang
   dikurangkan dari capaian. Ambang Rp1 jt hanya berlaku untuk kekurangan (supaya tidak ada paket baru yang sangat kecil).
 - Teks yang dikirim ke SiRUP memakai tanda baca ASCII (`-`, `>`, `x`, `...`) supaya aman di ekspor/sistem lain.
@@ -110,6 +133,8 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 - Hasil revisi 1→1 maupun 1→N selalu berstatus Final Draft. Setiap paket hasil mendapat id baris anggaran/lokasi/jenis baru, walaupun form mengirim id lama, sehingga menyalin id dari form yang terisi otomatis aman.
 - MAK paket = `id_komponen` (id node Komponen PKKR) + teks `SUB.AKUN`. Karena itu cabang PKKR harus ada terlebih dahulu.
 - Node PKKR hasil integrasi terkunci (nama/kode/pagu readonly), hanya PPK-nya yang bisa diubah.
+- Node PKKR Manual punya tautan Ubah (`programctr/edit{Program,Kegiatan,Output,SubOutput,Komponen,SubKomponen}`, form ke `programctr/simpan…` dengan `isEdit=true`) dan Nonaktifkan (`programctr/delete…Confirm?id=`, form konfirmasinya tanpa `method` = GET ke `programctr/delete…`).
+- Paket yang dibatalkan (status 51, tidak aktif) hanya punya pilihan revisi "aktif". Hasilnya Final Draft berkode sama (rekaman 2 Okt 2026, paket latihan 67984388 → 68014121).
 
 ## Batasan / belum diuji di produksi
 
@@ -117,11 +142,12 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 - Payload metode Dikecualikan disimpulkan dari script form (`metode_dikecualikan=-1`), belum dari rekaman. Periksa hasil revisi pertama.
 - Paket swakelola hanya dihitung jumlahnya, belum disandingkan per MAK.
 - Kelebihan besar (mis. modernisasi tahun jamak) tidak pernah dipotong otomatis. Kartunya wajib diputuskan pengguna.
-- Eksekutor 1→1, 1→N (termasuk draft #1 yang dikoreksi), dan "umumkan lalu revisi" untuk final draft belum pernah dijalankan tool ini di produksi. Uji pertama sebaiknya satu langkah dulu ("Jalankan 1 langkah").
+- Revisi 1→1 dan 1→N (draft #1 dikoreksi) sudah dijalankan tool di produksi (653526, 1 Okt 2026). Umumkan, 1→1, batal, dan aktifkan kembali sudah dijalankan pada paket latihan 626402 (67984388 → 68014121, 2 Okt 2026) dengan alur permintaan yang sama dengan fungsi tool. "Umumkan lalu revisi" untuk final draft, popup "Ajukan sekarang", dan tombol "Aktifkan kembali" (v1.4.0) baru diuji di halaman uji.
+- **Ubah dan nonaktifkan PKKR Manual belum pernah dijalankan di produksi.** Mulai dengan "Jalankan 1 penyesuaian", lalu cek di Kelola PKKR SiRUP. Belum diketahui apakah node yang dinonaktifkan masih ikut terbaca di daftar PKKR; tool hanya memberi peringatan bila masih terbaca.
 
 ## Merilis pembaruan
 
-1. Naikkan `@version` di `src/header.js`, misalnya 1.3.2 → 1.3.3. Tanpa ini, pengguna tidak menerima pembaruan.
+1. Naikkan `@version` di `src/header.js`, misalnya 1.4.0 → 1.4.1. Tanpa ini, pengguna tidak menerima pembaruan.
 2. Jalankan `node build.js`. Perintah ini menulis `dist/sirup_sanding_dipa.user.js` dan `dist/sirup_sanding_dipa.meta.js` dari header yang sama.
 3. Commit **kedua file `dist/`** bersama perubahan `src/`, lalu push ke `main`.
 
@@ -130,6 +156,7 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 ```
 node build.js                      # gabung src/ → dist/
 node test/test_rencana.js          # uji rencana dengan data 626402 (test/data, tidak ikut git)
+node test/test_pkkr.js             # uji penyesuaian PKKR Manual (rantai Manual tiruan di atas PKKR 626402)
 node test/plan_all_satker.js       # uji invarian rencana untuk 42 satker
 node test/debug_satker.js <kode>   # rincian rencana satu satker
 node test/cek_satker_pdf.js <pdf> [rup.json]   # pagu pengadaan per jenis belanja dari satu PDF + sanding dengan RUP
@@ -138,5 +165,6 @@ python test/anomali_lintas_satker.py
 ```
 
 Uji tampilan tanpa SiRUP: jalankan server statis di folder proyek (mis. `python -m http.server 8765`), lalu buka
-`http://localhost:8765/test/harness/rekap.html`. Halaman ini memuat userscript dengan API SiRUP tiruan dan data 626402.
+`http://localhost:8765/test/harness/rekap.html`. Halaman ini memuat userscript dengan API SiRUP tiruan dan data 626402,
+ditambah rantai PKKR Manual tiruan dan satu paket swakelola untuk menguji penyesuaian PKKR (`?tanpaManual` untuk mematikannya).
 `test/harness/fixture.js` dibuat dengan `node test/harness/buat_fixture.js`.

@@ -93,7 +93,11 @@ const UI = (() => {
         STEPS.forEach((s, i) => stepsEl.append(h('button', { class: `sdr-step${i === S.step ? ' on' : ''}${done[i] ? ' done' : ''}`, onclick: () => go(i) },
             h('span', { class: 'no' }, done[i] && i !== S.step ? '✓' : String(i + 1)), s.replace(/^\d+\.\s*/, ''))));
     }
+    let goNanti = null;
     function go(i) {
+        // dipanggil dari dalam proses yang sedang berjalan (mis. "Baca ulang" lalu go) → langkah tujuan
+        // memakai guard sendiri, jadi digambar setelah proses selesai (dulu halaman tertinggal kosong)
+        if (S.busy) { goNanti = i; return; }
         S.step = i; renderSteps(); body.innerHTML = ''; if (actEl) actEl.innerHTML = '';
         [stepData, stepPkkr, stepSanding, stepRekap, stepStruktur][i]();
     }
@@ -101,7 +105,7 @@ const UI = (() => {
         if (S.busy) return;
         S.busy = true; S.stop = false;
         try { await fn(); } catch (e) { log('GAGAL: ' + e.message, 'e'); console.error(e); await modal('Terjadi kesalahan', h('div', { class: 'errbox' }, e.message), [['Tutup', false, 'pri']]); }
-        finally { S.busy = false; renderSteps(); }
+        finally { S.busy = false; renderSteps(); if (goNanti != null) { const i = goNanti; goNanti = null; go(i); } }
     }
 
     // ── 1. Data & login ─────────────────────────────────────────────────
@@ -229,6 +233,7 @@ const UI = (() => {
                     h('tbody', {}, diff.beda.map(b => h('tr', {}, h('td', { class: 'mono' }, b.key), h('td', {}, b.nama), h('td', { class: 'n' }, fmt(b.paguDipa)), h('td', { class: 'n' }, fmt(b.paguSirup)), h('td', {}, b.manual ? 'Manual' : 'Integrasi'))))))));
             if (diff.hilang.length) box.append(h('details', {}, h('summary', {}, `Ada di PKKR SiRUP tetapi tidak ada di DIPA (${diff.hilang.length})`),
                 h('div', { class: 'tbl' }, h('table', { class: 't' }, h('tbody', {}, diff.hilang.map(b => h('tr', {}, h('td', { class: 'mono' }, b.key), h('td', {}, b.nama), h('td', { class: 'n' }, fmt(b.pagu)))))))));
+            box.append(sekPenyesuaianPkkr());
             box.append(h('div', { class: 'row', style: { marginTop: '12px' } }, h('button', { class: 'btn pri', onclick: () => go(2) }, 'Lanjut: sanding RUP →')));
         });
     }
@@ -305,6 +310,108 @@ const UI = (() => {
         await loadPkkr(true);
         S.an = null;
         go(1);
+    }
+
+    // ── 2b. Penyesuaian node PKKR Manual ────────────────────────────────
+    // Node Integrasi terkunci; yang bisa diubah hanya node Manual (rencana dari PkkrPlan). Pemakaian node
+    // dicek dari id komponen di detail paket penyedia dan jalur komponen paket swakelola.
+    const LV_NAMA = { prog: 'Program', keg: 'Kegiatan', kro: 'KRO', ro: 'RO', komp: 'Komponen', sub: 'Sub Komponen' };
+    const pkkrPilih = new Map();
+    const kunciPkkr = x => `${x.aksi}:${x.key}:${x.id}`;
+    const pkkrDipilih = x => pkkrPilih.has(kunciPkkr(x)) ? pkkrPilih.get(kunciPkkr(x)) : x.aksi === 'ubah' || x.bisa;
+    const gantiPaguPkkr = x => Math.abs(x.paguBaru - x.pagu) > 1000;
+    function rencanaPkkr() {
+        const adj = PkkrPlan.susun({ dipaNodes: S.dipa.nodes, pkkr: S.pkkr, pakets: S.pakets || [], swakelola: S.swakelola || [] });
+        const dalam = x => x.key.split('.').length;
+        // pemakaian belum bisa dicek sebelum paket RUP dibaca → jangan dinonaktifkan dulu
+        adj.non = adj.nonaktif.map(x => ({ ...x, aksi: 'nonaktif', bisa: x.bisa && !!S.pakets }));
+        const ubah = adj.ubah.map(x => ({ ...x, aksi: 'ubah' }));
+        const turun = ubah.filter(x => x.paguBaru < x.pagu - 1000).sort((a, b) => dalam(b) - dalam(a));
+        const naik = ubah.filter(x => !(x.paguBaru < x.pagu - 1000)).sort((a, b) => dalam(a) - dalam(b));
+        // urutan aman: nonaktifkan (anak dulu) → turunkan pagu (anak dulu) → naikkan pagu / ganti nama (induk dulu)
+        adj.urut = [...adj.non.filter(x => x.bisa), ...turun, ...naik];
+        adj.ubahTampil = ubah;
+        return adj;
+    }
+    function sekPenyesuaianPkkr() {
+        const adj = rencanaPkkr();
+        const card = h('div', { class: 'card', style: { marginTop: '16px' } }, h('h3', {}, 'Penyesuaian PKKR Manual'),
+            h('p', { class: 'note' }, 'Node hasil integrasi SAKTI terkunci sejak 31 Juli 2026; yang bisa disesuaikan hanya node Manual. Pagu salinan induk (Program/Kegiatan "(Manual)" dst.) = jumlah cabang Manual di bawahnya, pagu cabang Manual = pagu DIPA, catatan "[..]" dari SAKTI dibuang dari nama, dan node Manual yang tidak ada lagi di DIPA dinonaktifkan bila tidak dipakai paket mana pun.'));
+        if (!adj.manual) { card.append(h('div', { class: 'muted' }, 'Satker ini belum punya node PKKR Manual — tidak ada yang perlu disesuaikan.')); return card; }
+        if (!adj.ubah.length && !adj.non.length) { card.append(h('div', { class: 'okbox' }, `${adj.manual} node Manual sudah sesuai DIPA.`)); return card; }
+        const tombol = [];
+        const segar = () => { const n = adj.urut.filter(pkkrDipilih).length; for (const [b, f] of tombol) { b.disabled = !S.ctx.isKPA || !n; if (f) b.textContent = f(n); } };
+        const cb = x => { const c = chk(pkkrDipilih(x), v => { pkkrPilih.set(kunciPkkr(x), v); segar(); }); if (x.aksi === 'nonaktif' && !x.bisa) { c.checked = false; c.disabled = true; } return c; };
+        const kecil = t => h('div', { class: 'muted', style: { fontSize: '12.5px' } }, t);
+        if (adj.ubahTampil.length) card.append(h('h4', { style: { marginTop: '6px' } }, `Ubah pagu / nama (${adj.ubahTampil.length})`),
+            h('div', { class: 'tbl', style: { maxHeight: '340px' } }, h('table', { class: 't' },
+                h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Level'), h('th', {}, 'Kode'), h('th', {}, 'Nama'), h('th', { class: 'n' }, 'Pagu sekarang'), h('th', { class: 'n' }, 'Pagu baru'), h('th', {}, 'Dasar'))),
+                h('tbody', {}, adj.ubahTampil.map(x => h('tr', {}, h('td', {}, cb(x)), h('td', {}, LV_NAMA[x.level], x.salinan ? kecil('salinan induk') : null), h('td', { class: 'mono' }, x.key),
+                    h('td', {}, x.namaBaru !== x.nama ? [h('del', {}, x.nama), h('div', {}, h('ins', {}, x.namaBaru))] : x.nama),
+                    h('td', { class: 'n' }, fmt(x.pagu)), h('td', { class: 'n' }, gantiPaguPkkr(x) ? h('b', {}, fmt(x.paguBaru)) : h('span', { class: 'muted' }, 'tetap')),
+                    h('td', {}, kecil(x.ket))))))));
+        if (adj.non.length) card.append(h('h4', { style: { marginTop: '16px' } }, `Nonaktifkan — tidak ada lagi di DIPA (${adj.non.length})`),
+            !S.pakets ? h('div', { class: 'infobox row' }, h('span', { style: { flex: 1 } }, 'Pemakaian node oleh paket RUP belum dicek, jadi belum ada node yang bisa dinonaktifkan.'),
+                h('button', { class: 'btn sm', onclick: () => guard(async () => { await loadPakets(false); go(1); }) }, 'Cek pemakaian (baca paket RUP)')) : '',
+            h('div', { class: 'tbl', style: { maxHeight: '340px' } }, h('table', { class: 't' },
+                h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Level'), h('th', {}, 'Kode'), h('th', {}, 'Nama'), h('th', { class: 'n' }, 'Pagu'), h('th', {}, 'Pemakaian'), h('th', {}, 'Alasan'))),
+                h('tbody', {}, adj.non.map(x => h('tr', {}, h('td', {}, cb(x)), h('td', {}, LV_NAMA[x.level], x.salinan ? kecil('salinan induk') : null), h('td', { class: 'mono' }, x.key), h('td', {}, x.nama), h('td', { class: 'n' }, fmt(x.pagu)),
+                    h('td', {}, !S.pakets ? pill('belum dicek', 'p-mut') : x.dipakai.length ? [pill('dipakai', 'p-bad'), kecil(x.dipakai.slice(0, 6).join(', ') + (x.dipakai.length > 6 ? ` +${x.dipakai.length - 6}` : ''))] : pill('tidak dipakai', 'p-ok')),
+                    h('td', {}, kecil(x.alasan))))))));
+        if (adj.swTakTerbaca) card.append(h('div', { class: 'warnbox', style: { marginTop: '10px' } }, `${adj.swTakTerbaca} paket swakelola aktif tidak menampilkan jalur komponennya, sehingga pemakaiannya tidak bisa dicek. Periksa dulu di SiRUP sebelum menonaktifkan node.`));
+        if (adj.terkunci.length) card.append(kecil(`${adj.terkunci.length} node Integrasi berbeda dari DIPA atau tidak ada lagi di DIPA — terkunci, hanya informasi (lihat "Pagu berbeda" di atas).`));
+        const b1 = h('button', { class: 'btn', onclick: () => guard(() => jalankanPkkr(true)) }, 'Jalankan 1 penyesuaian');
+        const bN = h('button', { class: 'btn go', onclick: () => guard(() => jalankanPkkr(false)) });
+        tombol.push([b1, null], [bN, n => n ? `Jalankan ${n} penyesuaian terpilih` : 'Tidak ada yang bisa dijalankan']);
+        card.append(h('div', { class: 'row', style: { marginTop: '12px' } }, b1, bN,
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Belum pernah dijalankan di produksi — mulai dengan "Jalankan 1", lalu cek hasilnya di Kelola PKKR SiRUP.')));
+        segar();
+        return card;
+    }
+    async function jalankanPkkr(satu) {
+        let adj = rencanaPkkr();
+        if (adj.urut.some(x => x.aksi === 'nonaktif' && pkkrDipilih(x))) {
+            // pemakaian bisa berubah sejak paket dibaca (mis. PPK membuat paket baru) → cek ulang sebelum menonaktifkan
+            const sig = ps => ps.map(p => `${p.id}:${p.status}:${p.pagu}`).sort().join(',');
+            const py = await Sirup.daftarPaket(S.ctx.tahun, 'penyedia');
+            S.swakelola = await Sirup.daftarPaket(S.ctx.tahun, 'swakelola').catch(() => S.swakelola || []);
+            if (sig(py) !== sig(S.pakets || [])) { log('Daftar paket berubah sejak dibaca — membaca ulang detail paket sebelum menonaktifkan node…', 'w'); await loadPakets(true); }
+            adj = rencanaPkkr();
+        }
+        let daftar = adj.urut.filter(pkkrDipilih);
+        if (satu) daftar = daftar.slice(0, 1);
+        if (!daftar.length) { log('Tidak ada penyesuaian PKKR yang dipilih (atau node yang dipilih ternyata dipakai paket).', 'w'); go(1); return; }
+        const ok = await confirmBox(satu ? 'Jalankan 1 penyesuaian PKKR' : `Jalankan ${daftar.length} penyesuaian PKKR`,
+            `<p>Hanya node Manual yang diubah. Urutan: nonaktifkan (anak dulu) → turunkan pagu (anak dulu) → naikkan pagu / ganti nama (induk dulu).</p>
+            <div class="tbl"><table class="t"><tr><th>#</th><th>Tindakan</th><th>Node</th><th>Perubahan</th></tr>${daftar.map((x, i) => `<tr><td>${i + 1}</td><td>${x.aksi === 'nonaktif' ? '<span class="pill p-bad">nonaktifkan</span>' : '<span class="pill p-info">ubah</span>'}</td><td><span class="mono">${esc(x.key)}</span><br><span class="muted">${LV_NAMA[x.level]} · ${esc(x.nama)}</span></td><td>${x.aksi === 'nonaktif' ? `pagu Rp${fmt(x.pagu)} · ${esc(x.alasan)}`
+                : [gantiPaguPkkr(x) ? `pagu Rp${fmt(x.pagu)} → <b>Rp${fmt(x.paguBaru)}</b>` : '', x.namaBaru !== x.nama ? `nama → <b>${esc(x.namaBaru)}</b>` : ''].filter(Boolean).join('<br>')}</td></tr>`).join('')}</table></div>
+            <p class="note">Tindakan ini mengubah PKKR SiRUP atas nama akun KPA. Node yang dinonaktifkan bisa diaktifkan lagi lewat Kelola PKKR SiRUP.</p>`);
+        if (!ok) return;
+        let n = 0;
+        try {
+            for (const x of daftar) {
+                if (S.stop) { log('Dihentikan.', 'w'); break; }
+                if (x.aksi === 'nonaktif') {
+                    await Sirup.nonaktifkanPkkr(x);
+                    log(`PKKR Manual: ${LV_NAMA[x.level]} ${x.key} dinonaktifkan`, 'o');
+                } else {
+                    const gp = gantiPaguPkkr(x), gn = x.namaBaru !== x.nama;
+                    const r = await Sirup.ubahPkkr(x, { nama: gn ? x.namaBaru : null, pagu: gp ? x.paguBaru : null, alasan: 'Penyesuaian dengan DIPA revisi terakhir' });
+                    log(`PKKR Manual: ${LV_NAMA[x.level]} ${x.key} → ${[gp ? 'pagu Rp' + fmt(r.pagu) : '', gn ? `nama "${r.nama}"` : ''].filter(Boolean).join(', ')}`, 'o');
+                }
+                n++;
+                pkkrPilih.delete(kunciPkkr(x));
+                await Sirup.sleep(S.cfg.jeda);
+            }
+        } finally {
+            if (n) {
+                log('Membaca ulang PKKR…');
+                await loadPkkr(true);
+                const masih = daftar.slice(0, n).filter(x => x.aksi === 'nonaktif').filter(x => { const p = S.pkkr.get(x.key); const m = p && (p.manual ? p : p.manualTwin); return m && String(m.id) === String(x.id); });
+                if (masih.length) log(`PERHATIAN: ${masih.map(x => x.key).join(', ')} masih terbaca di PKKR setelah dinonaktifkan — cek di Kelola PKKR SiRUP.`, 'w');
+                S.an = null; go(1);
+            }
+        }
     }
 
     // ── 3. Sanding ─────────────────────────────────────────────────────
@@ -504,9 +611,9 @@ const UI = (() => {
         for (const w of r.peringatan) body.append(h('div', { class: 'warnbox' }, w));
         if (S.swakelola && S.swakelola.length) body.append(h('div', { class: 'infobox' }, `Satker ini punya ${S.swakelola.length} paket swakelola (Rp${fmt(S.swakelola.reduce((s, p) => s + p.pagu, 0))}) yang belum ikut disandingkan. Bila kekurangan sebuah akun sudah ditutup paket swakelola, pilih "abaikan" untuk akun itu di langkah 2.`));
         const belum = r.kartu.filter(k => !k.diputuskan).length;
-        const nUbah = r.perubahan.length + r.umumkan.length + r.batalFD.length;
+        const nUbah = daftarPengajuan().length;
         const nAntre = S.antre ? S.antre.langkah.filter(x => x.status === 'menunggu').length : null;
-        const TABS = [['putuskan', '1. Putuskan', belum ? `${belum} belum` : '✓'], ['ubah', '2. Perubahan paket', nUbah], ['baru', '3. Paket baru', r.paketBaru.length], ['jalankan', '4. Jalankan', nAntre == null ? '' : `${nAntre} antre`]];
+        const TABS = [['putuskan', '1. Putuskan', belum ? `${belum} belum` : '✓'], ['ubah', '2. Pengajuan revisi', nUbah], ['baru', '3. Paket baru', r.paketBaru.length], ['jalankan', '4. Jalankan', nAntre == null ? '' : `${nAntre} antre`]];
         body.append(h('div', { class: 'seg' }, ...TABS.map(([k, l, n]) => h('button', { class: rekapTab === k ? 'on' : '', onclick: () => { rekapTab = k; gambarRekap(); body.scrollTop = 0; } }, l, n === '' ? null : h('span', { class: 'cnt' }, String(n))))));
         const el = h('div', {});
         body.append(el);
@@ -530,12 +637,14 @@ const UI = (() => {
         return h('div', { class: 'actionbar' }, h('span', { class: 'sum' }, ringkasPilihan()), h('button', { class: 'btn pri', onclick: () => { rekapTab = tab; gambarRekap(); body.scrollTop = 0; } }, label));
     }
     function ringkasPilihan() {
-        const r = S.ren;
-        const n = f => r.perubahan.filter(c => dipilih(c) && f(c)).length;
-        const parts = [[n(c => c.jenis === 'ubah'), 'revisi'], [n(c => c.jenis === 'batal'), 'pembatalan'], [r.paketBaru.filter(b => dipilih(b) && b.hostId).length, 'paket baru'],
-            [r.umumkan.filter(dipilih).length, 'umumkan'], [r.batalFD.length, 'kembali ke PPK']].filter(([x]) => x);
-        const belum = r.kartu.filter(k => !k.diputuskan).length;
-        return (parts.length ? 'Dipilih: ' + parts.map(([x, l]) => `${x} ${l}`).join(' · ') : 'Belum ada aksi yang dipilih.') + (belum ? ` · ${belum} kartu belum diputuskan (tidak dijalankan)` : '');
+        // dihitung per pengajuan yang benar-benar akan dikirim (sama dengan isi antrean)
+        const pj = daftarPengajuan().filter(it => it.on && (it.jenis !== 'titip' || it.anak.some(dipilih)));
+        const n = j => pj.filter(it => it.jenis === j).length;
+        const baru = pj.filter(it => it.jenis === 'titip').reduce((s, it) => s + it.anak.filter(dipilih).length, 0);
+        const fd = (pj.find(it => it.jenis === 'umumkan') || { daftar: [] }).daftar.filter(dipilih).length;
+        const parts = [[n('ubah'), 'revisi 1→1'], [n('titip'), `revisi 1→N (${baru} paket baru)`], [fd, 'final draft diumumkan'], [n('batal'), 'pembatalan'], [n('batalFD'), 'kembali ke PPK']].filter(([x]) => x);
+        const belum = S.ren.kartu.filter(k => !k.diputuskan).length;
+        return (parts.length ? `Akan diajukan ${pj.length}: ` + parts.map(([x, l]) => `${x} ${l}`).join(' · ') : 'Belum ada pengajuan yang dipilih.') + (belum ? ` · ${belum} kartu belum diputuskan (tidak dijalankan)` : '');
     }
 
     // ── 4.1 Putuskan ────────────────────────────────────────────────────
@@ -677,72 +786,291 @@ const UI = (() => {
         return box;
     }
 
-    // ── 4.2 Perubahan paket ─────────────────────────────────────────────
-    function tabPerubahan(el) {
-        const r = S.ren;
-        el.append(h('p', { class: 'note' }, 'Satu baris = satu paket = satu revisi. Paket hasil revisi mendapat kode RUP baru berstatus Final Draft, lalu langsung diumumkan ulang oleh tool.'));
-        el.append(sekKekurangan());
-        if (!r.perubahan.length && !r.umumkan.length && !r.batalFD.length) el.append(kosong('Tidak ada paket existing yang perlu diubah.'));
-        const byKomp = new Map();
+    // ── 4.2 Pengajuan revisi ────────────────────────────────────────────
+    // Satu baris = satu pengajuan ke SiRUP (revisi 1→1, revisi 1→N, umumkan, pembatalan, kembalikan final
+    // draft). Klik baris → popup berisi isian pengajuan yang disusun seperti form revisi SiRUP.
+    const JENIS_PJ = { ubah: ['Revisi 1→1', 'p-info'], titip: ['Revisi 1→N', 'p-np'], umumkan: ['Umumkan', 'p-ok'], batal: ['Pembatalan', 'p-bad'], batalFD: ['Kembalikan ke PPK', 'p-warn'] };
+    const GRUP_PJ = { ubah: 'Revisi satu ke satu', titip: 'Revisi satu ke banyak (titipan paket baru)', umumkan: 'Umumkan final draft', batal: 'Pembatalan paket', batalFD: 'Final draft dikembalikan ke PPK' };
+    const URUT_PJ = ['ubah', 'titip', 'umumkan', 'batal', 'batalFD'];
+    let filterPj = 'semua';
+    const alasanDari = (id, def) => (S.edit[id] && S.edit[id].alasan) || def;
+    const kompDari = mak => String(mak || '').split('.').slice(0, 5).join('.');
+    function daftarPengajuan() {
+        const r = S.ren, out = [];
+        if (!r) return out;
+        const titipOn = new Set(r.titipan.filter(t => dipilih(t) && r.paketBaru.some(b => b.hostId === t.hostId && dipilih(b))).map(t => t.hostId));
         for (const c of r.perubahan) {
-            const mak = (c.rowsSesudah[0] || c.rowsSebelum[0] || {}).mak || '';
-            const k = mak.split('.').slice(0, 5).join('.');
-            if (!byKomp.has(k)) byKomp.set(k, []);
-            byKomp.get(k).push(c);
+            if (c.jenis === 'ubah' && titipOn.has(c.paketId)) continue;   // menjadi draft #1 revisi satu ke banyak
+            out.push({ id: c.id, jenis: c.jenis, paketId: c.paketId, nama: c.nama, sebelum: c.sebelum, sesudah: c.jenis === 'batal' ? 0 : c.sesudah, label: c.label.filter(l => l !== 'batalkan'),
+                peringatan: c.peringatan, catatan: c.catatan, alasan: alasanDari(c.id, c.alasan), alasanAwal: c.alasan, c, umumkanDulu: c.umumkanDulu,
+                on: dipilih(c), setOn: v => setPilih(c.id, v), komp: kompDari((c.rowsSebelum[0] || c.rowsSesudah[0] || {}).mak) });
         }
-        for (const [k, list] of [...byKomp.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-            el.append(h('div', { class: 'grp-hd' }, h('span', { class: 'mono' }, k), h('span', {}, namaNode(k))));
-            el.append(h('div', { class: 'list' }, ...list.map(barisPerubahan)));
+        for (const t of r.titipan) {
+            const anak = r.paketBaru.filter(b => b.hostId === t.hostId);
+            if (!anak.length) continue;
+            const ch = r.perubahan.find(c => c.paketId === t.hostId && c.jenis === 'ubah');
+            const chOn = !!ch && dipilih(ch), anakOn = anak.filter(dipilih);
+            const awal = (chOn ? ch.alasan + '; ' : 'Revisi: ') + 'penambahan paket sesuai DIPA revisi terakhir';
+            out.push({ id: t.id, jenis: 'titip', paketId: t.hostId, nama: t.nama, sebelum: t.pagu, sesudah: (chOn ? ch.sesudah : t.pagu) + anakOn.reduce((s, b) => s + b.total, 0),
+                label: [`+${anakOn.length} paket baru`, ...(chOn ? ch.label : [])], peringatan: [...(chOn ? ch.peringatan : []), ...anak.flatMap(b => b.peringatan.map(x => `${b.nama.slice(0, 40)}: ${x}`))],
+                catatan: chOn ? ch.catatan : [], alasan: alasanDari(t.id, awal), alasanAwal: awal, t, ch, chOn, anak,
+                on: dipilih(t), setOn: v => setPilih(t.id, v), komp: kompDari(((chOn && ch.rowsSesudah[0]) || t.pk1.anggaran[0] || {}).mak) });
         }
         if (r.umumkan.length) {
-            el.append(h('h3', { style: { marginTop: '20px' } }, `Final draft siap diumumkan (${r.umumkan.length})`));
-            el.append(h('div', { class: 'list' }, ...r.umumkan.map(u => baris({ id: u.id, pilih: dipilih(u), title: u.nama, sub: [h('span', { class: 'mono' }, u.paketId), pill('umumkan', 'p-ok')], side: [h('b', {}, 'Rp' + fmt(u.pagu))] }))));
+            const on = r.umumkan.filter(dipilih);
+            out.push({ id: 'umumkan', jenis: 'umumkan', paketId: '', nama: `${r.umumkan.length} final draft siap diumumkan`, sebelum: 0, sesudah: on.reduce((s, u) => s + u.pagu, 0),
+                label: [], peringatan: [], catatan: [], daftar: r.umumkan, on: on.length > 0, setOn: v => { for (const u of r.umumkan) S.pilih.set(u.id, v); simpanKeadaan(); segarkanHeader(); }, komp: '' });
         }
-        if (r.batalFD.length) {
-            el.append(h('h3', { style: { marginTop: '20px' } }, `Final draft dikembalikan ke PPK (${r.batalFD.length})`), h('p', { class: 'note' }, 'Dari keputusan di langkah 1.'));
-            el.append(h('div', { class: 'list' }, ...r.batalFD.map(f => h('div', { class: 'item' }, h('div', { class: 'item-hd' }, h('span', {}, '↩'), h('div', {}, h('div', { class: 'item-title' }, f.nama), h('div', { class: 'item-sub' }, h('span', { class: 'mono' }, f.paketId), h('span', {}, f.alasan))), h('div', { class: 'item-side' }, h('b', {}, 'Rp' + fmt(f.pagu))))))));
+        for (const f of r.batalFD) {
+            const id = 'f:' + f.paketId, awal = 'Dikembalikan ke PPK: ' + f.alasan;
+            out.push({ id, jenis: 'batalFD', paketId: f.paketId, nama: f.nama, sebelum: f.pagu, sesudah: 0, label: [], peringatan: [], catatan: [f.alasan], alasan: alasanDari(id, awal), alasanAwal: awal, f,
+                on: S.pilih.has(id) ? S.pilih.get(id) : true, setOn: v => setPilih(id, v), komp: '' });
         }
-        actEl.append(barLanjut('Lanjut: paket baru →', 'baru'));
+        return out.sort((a, b) => URUT_PJ.indexOf(a.jenis) - URUT_PJ.indexOf(b.jenis) || a.komp.localeCompare(b.komp) || String(a.paketId).localeCompare(String(b.paketId)));
     }
-    function baris({ id, pilih, title, sub, side, cls, onPilih }) {
-        const it = h('div', { class: 'item' + (cls ? ' ' + cls : '') + (pilih ? '' : ' off') });
-        const cb = chk(pilih, v => { it.classList.toggle('off', !v); setPilih(id, v); if (onPilih) onPilih(v); });
-        it.append(h('div', { class: 'item-hd' }, cb, h('div', {}, h('div', { class: 'item-title' }, title), sub ? h('div', { class: 'item-sub' }, ...[].concat(sub)) : null), h('div', { class: 'item-side' }, ...[].concat(side || []))));
-        return it;
+    function tabPerubahan(el) {
+        const pj = daftarPengajuan();
+        el.append(h('p', { class: 'note' }, 'Satu baris = satu pengajuan ke SiRUP. Klik baris untuk melihat isiannya seperti di form revisi SiRUP (bagian yang berubah ditandai), mengubah isian atau alasan, dan mengajukannya sendiri. Baris yang dicentang ikut antrean di tab Jalankan.'));
+        const nKurang = S.ren.kekurangan.filter(k => k.cara !== 'abaikan' || (S.atur[k.mak] || {}).cara === 'abaikan').length;
+        el.append(h('details', { class: 'card', style: { padding: '12px 18px' } }, h('summary', {}, `Cara menutup kekurangan pagu (${nKurang} akun)`), sekKekurangan(true)));
+        if (!pj.length) { el.append(kosong('Tidak ada pengajuan ke SiRUP yang perlu dibuat.')); actEl.append(barLanjut('Lanjut: paket baru →', 'baru')); return; }
+        const n = j => pj.filter(it => j === 'semua' || it.jenis === j).length;
+        if (filterPj !== 'semua' && !n(filterPj)) filterPj = 'semua';
+        el.append(h('div', { class: 'chips' }, ...['semua', ...URUT_PJ].filter(j => n(j)).map(j => h('button', { class: 'chip' + (filterPj === j ? ' on' : ''), onclick: () => { filterPj = j; gambarRekap(); } },
+            j === 'semua' ? 'Semua' : JENIS_PJ[j][0], h('span', { class: 'cnt' }, String(n(j)))))));
+        const list = h('div', { class: 'pj-list' });
+        for (const j of URUT_PJ) {
+            const xs = pj.filter(it => it.jenis === j && (filterPj === 'semua' || filterPj === j));
+            if (!xs.length) continue;
+            const d = xs.filter(it => it.on).reduce((s, it) => s + (it.jenis === 'batalFD' ? 0 : it.sesudah - it.sebelum), 0);
+            list.append(h('div', { class: 'pj-grp' }, h('span', {}, `${GRUP_PJ[j]} (${xs.length})`), d ? h('span', { class: 'delta ' + (d > 0 ? 'up' : 'down') }, `RUP terumumkan ${d > 0 ? '+' : '−'}Rp${fmtM(Math.abs(d))}`) : null));
+            for (const it of xs) list.append(barisPengajuan(it));
+        }
+        el.append(list);
+        actEl.append(barLanjut('Lanjut: paket baru →', 'baru'));
     }
     function chk(v, fn) { const c = h('input', { type: 'checkbox', checked: v }); c.addEventListener('change', () => fn(c.checked)); return c; }
     const LABEL_CLS = { 'tambah pagu': 'p-ok', 'pindah MAK': 'p-info', 'keluarkan non-pengadaan': 'p-np', 'potong kelebihan': 'p-warn', 'batalkan': 'p-bad', 'susun ulang': 'p-info', 'sumber dana': 'p-mut' };
-    function barisPerubahan(c) {
-        const delta = c.jenis === 'batal' ? -c.sebelum : c.sesudah - c.sebelum;
-        const it = baris({ id: c.id, pilih: dipilih(c), cls: c.peringatan.length ? 'warn' : '', title: c.nama,
-            sub: [h('span', { class: 'mono' }, c.paketId), ...c.label.map(l => pill(l, LABEL_CLS[l] || 'p-mut')), c.umumkanDulu ? pill('final draft: umumkan dulu', 'p-info') : null, c.titipanHost ? pill('juga dititipi paket baru', 'p-mut') : null],
-            side: [h('b', {}, c.jenis === 'batal' ? 'dibatalkan' : 'Rp' + fmt(c.sesudah)), delta === 0 ? h('span', { class: 'delta' }, 'pagu tetap')
-                : h('span', { class: 'delta ' + (delta > 0 ? 'up' : 'down') }, `${delta > 0 ? '+' : '−'}Rp${fmt(Math.abs(delta))} (semula Rp${fmt(c.sebelum)})`)] });
-        const rinci = h('div', { class: 'rinci' });
-        const tb = h('tbody', {});
-        const lama = new Map(); for (const x of c.rowsSebelum) lama.set(x.mak, (lama.get(x.mak) || 0) + x.pagu);
-        const baru = new Map(); for (const x of c.rowsSesudah) baru.set(x.mak, (baru.get(x.mak) || 0) + x.pagu);
-        for (const mak of [...new Set([...lama.keys(), ...baru.keys()])]) {
-            const a = lama.get(mak) || 0, b = baru.get(mak) || 0;
-            tb.append(h('tr', {}, h('td', { class: 'mono' }, mak), h('td', { class: 'n' }, a ? fmt(a) : '–'), h('td', { class: 'n' }, b ? fmt(b) : '–'), h('td', { class: 'n' }, a === b ? '' : h('span', { class: 'delta ' + (b >= a ? 'up' : 'down') }, `${b >= a ? '+' : '−'}${fmt(Math.abs(b - a))}`))));
-        }
-        rinci.append(h('table', { class: 't diff' }, h('thead', {}, h('tr', {}, h('th', {}, 'MAK'), h('th', { class: 'n' }, 'Sebelum'), h('th', { class: 'n' }, 'Sesudah'), h('th', { class: 'n' }, 'Perubahan'))), tb));
-        if (c.catatan.length) rinci.append(h('div', { class: 'notes', style: { margin: '10px 0 0' } }, ...c.catatan.map(t => h('div', {}, '• ' + t))));
-        if (c.peringatan.length) rinci.append(h('div', { class: 'warnbox', style: { margin: '10px 0 0' } }, ...c.peringatan.map(t => h('div', {}, t))));
-        if (c.lokasiLain && c.pk && S.lokasiSatker) rinci.append(h('div', { class: 'row', style: { marginTop: '10px' } }, h('span', { class: 'muted' }, `Lokasi paket (${c.pk.lokasiRaw.map(l => l.kab || l.id_kabupaten).join(', ')}) di luar provinsi satker.`),
-            h('button', { class: 'btn sm', onclick: () => { c.pk.lokasiRaw = [{ id: '', id_provinsi: S.lokasiSatker.id_provinsi, id_kabupaten: S.lokasiSatker.id_kabupaten, detil: S.lokasiSatker.detil }]; catatEdit(c.id, c.pk, 'lokasiRaw'); hitungUlang(); } }, 'Ganti ke lokasi satker')));
-        const tog = h('button', { class: 'btn sm' }, 'Rincian');
-        rinci.style.display = 'none';
-        tog.addEventListener('click', () => { const s = rinci.style.display === 'none'; rinci.style.display = s ? '' : 'none'; tog.textContent = s ? 'Tutup rincian' : 'Rincian'; });
-        const bar = h('div', { class: 'row', style: { padding: '0 16px 12px 47px' } }, tog);
-        if (c.pk) { const ed = editorIsian(c.id, c.pk, false); bar.append(ed.tombol, ed.status); it.append(bar, h('div', { style: { padding: '0 16px 12px 47px' } }, rinci), ed.body); }
-        else it.append(bar, h('div', { style: { padding: '0 16px 12px 47px' } }, rinci));
-        return it;
+    function barisPengajuan(it) {
+        const [jl, jc] = JENIS_PJ[it.jenis];
+        const L = S.antre && S.antre.langkah.find(x => x.id === it.id && x.status !== 'selesai');
+        const delta = it.sesudah - it.sebelum;
+        const row = h('div', { class: 'pj-row' + (it.on ? '' : ' off') + (it.peringatan.length ? ' warn' : ''), tabindex: '0', title: 'Klik untuk melihat isian pengajuan',
+            onclick: () => popupPengajuan(it.id), onkeydown: e => { if (e.key === 'Enter') popupPengajuan(it.id); } });
+        const cb = chk(it.on, v => { it.on = v; it.setOn(v); row.classList.toggle('off', !v); });
+        cb.title = 'Ikut antrean';
+        const sisi = it.jenis === 'umumkan' ? [h('b', {}, 'Rp' + fmt(it.sesudah)), h('span', { class: 'delta up' }, 'masuk RUP terumumkan')]
+            : it.jenis === 'batalFD' ? [h('b', {}, 'Rp' + fmt(it.sebelum)), h('span', { class: 'delta' }, 'final draft · RUP terumumkan tetap')]
+            : it.jenis === 'batal' ? [h('b', {}, 'dibatalkan'), h('span', { class: 'delta down' }, `−Rp${fmt(it.sebelum)}`)]
+            : [h('b', {}, 'Rp' + fmt(it.sesudah)), delta === 0 ? h('span', { class: 'delta' }, 'pagu tetap') : h('span', { class: 'delta ' + (delta > 0 ? 'up' : 'down') }, `${delta > 0 ? '+' : '−'}Rp${fmt(Math.abs(delta))} (semula Rp${fmt(it.sebelum)})`)];
+        const kode = it.jenis === 'umumkan' ? it.daftar.filter(dipilih).map(u => u.paketId) : [];
+        row.append(h('label', { class: 'pj-cb', onclick: e => e.stopPropagation() }, cb), pill(jl, jc),
+            h('div', { class: 'pj-main' }, h('div', { class: 'pj-title' }, it.nama),
+                h('div', { class: 'pj-sub' }, h('span', { class: 'mono' }, it.jenis === 'umumkan' ? kode.slice(0, 8).join(', ') + (kode.length > 8 ? ' …' : '') : it.paketId),
+                    ...it.label.map(l => pill(l, LABEL_CLS[l] || 'p-mut')), it.umumkanDulu ? pill('final draft: umumkan dulu', 'p-info') : null,
+                    it.peringatan.length ? pill(`${it.peringatan.length} peringatan`, 'p-warn') : null,
+                    L ? pill('antrean: ' + (ST_LANGKAH[L.status] || [L.status])[0], (ST_LANGKAH[L.status] || [0, 'p-mut'])[1]) : null)),
+            h('div', { class: 'pj-side' }, ...sisi), h('span', { class: 'pj-go' }, '›'));
+        return row;
     }
-    function sekKekurangan() {
+    function ringkasPj(it) {
+        if (it.jenis === 'umumkan') { const on = it.daftar.filter(dipilih); return `${on.length} dari ${it.daftar.length} final draft dicentang · Rp${fmt(on.reduce((s, u) => s + u.pagu, 0))} masuk RUP terumumkan`; }
+        if (it.jenis === 'batalFD') return `Final draft Rp${fmt(it.sebelum)} dikembalikan ke PPK · RUP terumumkan tidak berubah`;
+        if (it.jenis === 'batal') return `Paket terumumkan Rp${fmt(it.sebelum)} dibatalkan`;
+        const d = it.sesudah - it.sebelum;
+        return `Pagu Rp${fmt(it.sebelum)} → Rp${fmt(it.sesudah)}${d ? ` (${d > 0 ? '+' : '−'}Rp${fmt(Math.abs(d))})` : ' (tetap)'}${it.jenis === 'titip' ? ` · ${it.anak.filter(dipilih).length} paket baru` : ''}${it.umumkanDulu ? ' · final draft diumumkan dulu' : ''}`;
+    }
+    // Isian paket sekarang dalam bentuk isian revisi; jadwal dibaca apa adanya (tanpa dirapikan) supaya perbedaannya jujur
+    function pkLama(paketId) {
+        const p = (S.pakets || []).find(x => x.id === paketId);
+        if (!p) return null;
+        const t = p.tanggal || {}, Y = Rencana.ym;
+        const pk = Rencana.pkDari(p, (p.sumberDana || []).filter(r => +r.pagu > 0), S.cfg);
+        pk.jadwal = { awalPengadaan: Y(t.awalPengadaan) || Y(p.pemilihan && p.pemilihan.mulai), akhirPengadaan: Y(t.akhirPengadaan) || Y(p.pemilihan && p.pemilihan.akhir),
+            awalPekerjaan: Y(t.awalPekerjaan) || Y(p.pelaksanaan && p.pelaksanaan.mulai), akhirPekerjaan: Y(t.akhirPekerjaan) || Y(p.pelaksanaan && p.pelaksanaan.akhir),
+            awalKebutuhan: Y(p.pemanfaatan && p.pemanfaatan.mulai), kebutuhan: Y(p.pemanfaatan && p.pemanfaatan.akhir) };
+        return pk;
+    }
+    const DANA_NAMA = { A: 'RM', D: 'PNBP', F: 'BLU', T: 'SBSN', B: 'PLN' };
+    const BLN = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+    const bln = v => { const m = String(v || '').match(/^(\d{4})-(\d{2})/); return m ? `${BLN[+m[2] - 1]} ${m[1]}` : '–'; };
+    function namaKab(l) {
+        if (l.kab) return l.kab;
+        const L = S.lokasiSatker;
+        if (L && +L.id_kabupaten === +l.id_kabupaten) return L.kab;
+        const r = Object.values(S.lokRkk || {}).find(x => x && +x.id_kabupaten === +l.id_kabupaten);
+        return r ? r.kab : (l.id_kabupaten ? 'kab/kota id ' + l.id_kabupaten : '–');
+    }
+    function tampilan(pk) {
+        if (!pk) return null;
+        const ang = (pk.anggaran || []).filter(a => +a.pagu > 0);
+        const total = ang.reduce((s, a) => s + (+a.pagu || 0), 0);
+        const JN = Object.fromEntries(Object.entries(Sirup.JENIS_ID).map(([k, v]) => [String(v), k]));
+        const j = pk.jadwal || {};
+        const rapi = x => String(x || '').replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
+        const kecuali = /dikecualikan/i.test(pk.metode || '');
+        return {
+            nama: rapi(pk.nama),
+            lokasi: (pk.lokasiRaw || []).map(l => ({ k: `${+l.id_provinsi || 0}|${+l.id_kabupaten || 0}|${rapi(l.detil)}`, prov: l.prov || Sirup.PROVINSI[+l.id_provinsi] || '–', kab: namaKab(l), detil: rapi(l.detil) })),
+            volume: rapi(pk.volume), uraian: rapi(pk.uraian), spesifikasi: rapi(pk.spesifikasi),
+            praDipa: pk.praDipa ? 'Ya' : 'Tidak',
+            dana: ang.map(a => ({ mak: a.mak, pagu: Math.round(+a.pagu), dana: DANA_NAMA[a.danaApbn || 'A'] || a.danaApbn, komp: String(a.idKomponen || komponenId(a.mak) || '') })),
+            total: Math.round(total),
+            jenis: pk.jenisList && pk.jenisList.length ? pk.jenisList.map(x => [JN[String(x.jenisid)] || String(x.jenisid), Math.round(+x.pagu)]) : [[pk.jenis || '–', Math.round(total)]],
+            pdn: pk.pdn ? 'Ya' : 'Tidak', umkm: pk.umkm ? 'Ya' : 'Tidak' + (pk.alasanUmkm ? ` — ${pk.alasanUmkm}` : ''),
+            spp: ['ekonomi', 'sosial', 'lingkungan'].filter(k => (pk.spp || {})[k]).map(k => k[0].toUpperCase() + k.slice(1)).join(', ') || 'tidak ada',
+            dikecualikan: kecuali ? 'Ya' : 'Tidak', metode: kecuali ? '–' : (pk.metode || '–'),
+            jadwal: [['Pemanfaatan barang/jasa', j.awalKebutuhan, j.kebutuhan], ['Pelaksanaan kontrak', j.awalPekerjaan, j.akhirPekerjaan], ['Pemilihan penyedia', j.awalPengadaan, j.akhirPengadaan]].map(([l, a, b]) => [l, bln(a), bln(b)]),
+        };
+    }
+    function labelKomponen(mak, id) {
+        if (!id) return pill('belum ada di PKKR', 'p-bad');
+        const k5 = kompDari(mak);
+        const n = S.pkkr && S.pkkr.get(k5);
+        const m = n && n.manualTwin && String(n.manualTwin.id) === String(id) ? n.manualTwin : n && n.manual ? n : null;
+        return h('span', { title: 'id komponen PKKR ' + id }, `${k5.split('.').pop()} ${((m || n) || {}).nama || ''}`.trim(), m ? [' ', pill('Manual', 'p-mut')] : null);
+    }
+    const KUNCI_PJ = [['nama', 'nama paket'], ['lokasi', 'lokasi'], ['volume', 'volume'], ['uraian', 'uraian'], ['spesifikasi', 'spesifikasi'], ['praDipa', 'pra DIPA'], ['dana', 'sumber dana/MAK'],
+        ['total', 'total pagu'], ['jenis', 'jenis pengadaan'], ['pdn', 'PDN'], ['umkm', 'usaha kecil'], ['spp', 'SPP'], ['dikecualikan', 'dikecualikan'], ['metode', 'metode'], ['jadwal', 'jadwal']];
+    // Pratinjau isian pengajuan dengan urutan bagian form revisi SiRUP; lama → baru ditandai (polos = tanpa pembanding)
+    function pratinjau(lama, baru, { polos } = {}) {
+        const A = polos ? null : tampilan(lama), B = tampilan(baru || lama);
+        const sig = (k, v) => k === 'lokasi' ? v.map(x => x.k).join(';') : k === 'jenis' ? v.map(x => x[0]).join(';') : JSON.stringify(v);
+        const beda = k => !!A && sig(k, A[k]) !== sig(k, B[k]);
+        const v1 = (k, f = x => x) => !beda(k) ? h('span', {}, f(B[k]) || '–') : h('span', {}, h('del', {}, f(A[k]) || '–'), ' → ', h('ins', {}, f(B[k]) || '–'));
+        const br = (label, isi) => h('div', { class: 'frm-r' }, h('div', { class: 'frm-l' }, label), h('div', { class: 'frm-v' }, isi));
+        const teks = k => !beda(k) ? h('div', { class: 'txt' }, B[k] || '–') : h('div', {}, h('div', { class: 'txt del' }, A[k] || '–'), h('div', { class: 'txt ins', style: { marginTop: '6px' } }, B[k] || '–'));
+        const tabel = (kepala, rows) => h('table', { class: 't' }, h('thead', {}, h('tr', {}, ...kepala.map(([t, n]) => h('th', { class: n ? 'n' : '' }, t)))), h('tbody', {}, rows));
+        const out = h('div', { class: 'frm' });
+        const bagian = (no, judul, kunci, ...isi) => {
+            const ch = kunci.some(beda);
+            out.append(h('section', { class: 'frm-s' + (ch ? ' ch' : A ? ' tetap' : '') }, h('div', { class: 'frm-t' }, h('span', { class: 'no' }, String(no)), judul,
+                ch ? pill('berubah', 'p-warn') : A ? h('span', { class: 'muted', style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0 } }, 'tetap') : null), ...isi));
+        };
+        bagian(1, 'Paket', ['nama'], br('Tahun anggaran', String(S.ctx.tahun)), br('Satuan kerja', S.ctx.satkerNama || S.ctx.kodeSatker || '–'), br('Nama paket', v1('nama')));
+        {
+            const lamaK = new Set(A ? A.lokasi.map(x => x.k) : []), baruK = new Set(B.lokasi.map(x => x.k));
+            const rows = B.lokasi.map((l, i) => h('tr', { class: A && !lamaK.has(l.k) ? 'add' : '' }, h('td', {}, String(i + 1)), h('td', {}, l.prov), h('td', {}, l.kab), h('td', {}, l.detil || '–')));
+            if (A) for (const l of A.lokasi.filter(x => !baruK.has(x.k))) rows.push(h('tr', { class: 'del' }, h('td', {}, '−'), h('td', {}, l.prov), h('td', {}, l.kab), h('td', {}, l.detil || '–')));
+            bagian(2, 'Lokasi pekerjaan', ['lokasi'], tabel([['No'], ['Provinsi'], ['Kabupaten/Kota'], ['Detail lokasi']], rows));
+        }
+        bagian(3, 'Uraian pekerjaan', ['volume', 'uraian', 'spesifikasi'], br('Volume pekerjaan', v1('volume')), br('Uraian pekerjaan', teks('uraian')), br('Spesifikasi pekerjaan', teks('spesifikasi')));
+        {
+            const kode = [S.ctx.kodeBA, S.ctx.kodeEselon, S.ctx.kodeSatker].filter(Boolean).join('.');
+            const sisaLama = new Map();
+            for (const d of A ? A.dana : []) { if (!sisaLama.has(d.mak)) sisaLama.set(d.mak, []); sisaLama.get(d.mak).push(d); }
+            const baris = (d, no, cls, lamaD) => h('tr', { class: cls }, h('td', {}, no), h('td', {}, 'APBN · ' + d.dana), h('td', {}, S.ctx.kodeKldi || '–'), h('td', { class: 'mono', style: { fontSize: '12px' } }, (kode ? kode + '.' : '') + d.mak),
+                h('td', {}, labelKomponen(d.mak, d.komp)), h('td', { class: 'n' }, lamaD && lamaD.pagu !== d.pagu ? [h('del', {}, fmt(lamaD.pagu)), ' ', h('ins', {}, fmt(d.pagu))] : fmt(d.pagu)));
+            const rows = B.dana.map((d, i) => { const q = sisaLama.get(d.mak), lamaD = q && q.length ? q.shift() : null; return baris(d, String(i + 1), A && !lamaD ? 'add' : '', lamaD); });
+            if (A) for (const q of sisaLama.values()) for (const d of q) rows.push(baris(d, '−', 'del'));
+            bagian(4, 'Sumber dana', ['praDipa', 'dana', 'total'], br('Pra DIPA/DPA', v1('praDipa')),
+                tabel([['No'], ['Sumber dana'], ['Asal dana'], ['MAK'], ['Komponen PKKR'], ['Pagu (Rp)', 1]], rows), br('Total pagu', v1('total', x => 'Rp' + fmt(x))));
+        }
+        const barisJenis = (xs, cls, lama) => xs.map(([j, p], i) => { const o = lama && lama[i];
+            return h('tr', { class: cls }, h('td', {}, j), h('td', { class: 'n' }, o && o[1] !== p ? [h('del', {}, fmt(o[1])), ' ', h('ins', {}, fmt(p))] : fmt(p))); });
+        bagian(5, 'Jenis pengadaan', ['jenis'], tabel([['Jenis pengadaan'], ['Pagu (Rp)', 1]], beda('jenis') ? [...barisJenis(A.jenis, 'del'), ...barisJenis(B.jenis, 'add')] : barisJenis(B.jenis, '', A && A.jenis)));
+        bagian(6, 'Produk dalam negeri & usaha kecil', ['pdn', 'umkm'], br('Produk dalam negeri', v1('pdn')), br('Usaha kecil/koperasi', v1('umkm')));
+        bagian(7, 'Pengadaan berkelanjutan (SPP)', ['spp'], br('Aspek', v1('spp')));
+        bagian(8, 'Pemilihan', ['dikecualikan', 'metode'], br('Pengadaan dikecualikan', v1('dikecualikan')), br('Rencana metode pemilihan', v1('metode')));
+        bagian(9, 'Rencana jadwal', ['jadwal'], tabel([['Tahap'], ['Awal'], ['Akhir']], B.jadwal.map(([l, a, b], i) => {
+            const o = A && A.jadwal[i];
+            const sel = (x, y) => !o || x === y ? x : [h('del', {}, y), ' → ', h('ins', {}, x)];
+            return h('tr', {}, h('td', {}, l), h('td', {}, sel(a, o && o[1])), h('td', {}, sel(b, o && o[2])));
+        })));
+        out.diubah = A ? KUNCI_PJ.filter(([k]) => beda(k)).map(([, l]) => l) : [];
+        return out;
+    }
+    // Satu draft pengajuan: pratinjau (digambar ulang tiap isian berubah) + editor isian yang bisa dibuka
+    function blokDraft({ judul, sub, lama, baru, idEdit, paketBaru = false, kepala, off }) {
+        const prev = h('div', {}), ringkas = h('div', { class: 'ubah-list' });
+        const segar = () => {
+            const f = pratinjau(lama, baru, { polos: !baru || paketBaru });
+            prev.innerHTML = ''; prev.append(f);
+            ringkas.innerHTML = '';
+            if (baru && !paketBaru && lama) ringkas.append(...(f.diubah.length ? [h('span', { class: 'muted' }, 'Berubah:'), ...f.diubah.map(x => pill(x, 'p-warn'))] : [h('span', { class: 'muted' }, 'Isian sama dengan paket sekarang')]));
+        };
+        const hd = h('div', { class: 'draft-hd' }, kepala || null, h('div', { style: { flex: 1, minWidth: '220px' } }, h('b', {}, judul), sub ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, sub) : null), ringkas);
+        const el = h('div', { class: 'draft' + (off ? ' off' : '') }, hd);
+        if (baru && idEdit) { const ed = editorIsian(idEdit, baru, paketBaru, () => segar()); hd.append(ed.tombol); el.append(ed.body); }
+        el.append(prev);
+        segar();
+        return el;
+    }
+    function peringatanLokasi(id, pk, segar) {
+        const L = S.lokasiSatker;
+        if (!L || !pk || !(pk.lokasiRaw || []).length || !pk.lokasiRaw.every(l => +l.id_provinsi !== +L.id_provinsi)) return null;
+        return h('div', { class: 'warnbox row', style: { margin: 0 } }, h('span', { style: { flex: 1 } }, `Lokasi paket (${pk.lokasiRaw.map(namaKab).join(', ')}) di luar provinsi satker (${L.prov}).`),
+            h('button', { class: 'btn sm', onclick: () => { pk.lokasiRaw = [{ id: '', id_provinsi: L.id_provinsi, id_kabupaten: L.id_kabupaten, detil: L.detil, prov: L.prov, kab: L.kab }]; catatEdit(id, pk, 'lokasiRaw'); segar(); } }, 'Ganti ke lokasi satker'));
+    }
+    function kartuAlasan(it) {
+        const ta = h('textarea', { style: { minHeight: '60px' } }, it.alasan || '');
+        ta.addEventListener('change', () => {
+            const v = ta.value.trim(), e = S.edit[it.id] = { ...(S.edit[it.id] || {}) };
+            if (v && v !== it.alasanAwal) e.alasan = v; else { delete e.alasan; ta.value = it.alasanAwal || ''; }
+            simpanKeadaan();
+        });
+        return h('div', { class: 'fs' }, h('h4', {}, it.jenis === 'batalFD' ? 'Alasan dikembalikan' : it.jenis === 'batal' ? 'Alasan pembatalan' : 'Alasan revisi'), ta,
+            h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } }, 'Tercatat di riwayat paket SiRUP. Boleh diubah; kosongkan untuk kembali ke alasan bawaan.'));
+    }
+    function popupPengajuan(id) {
+        const cari = () => daftarPengajuan().find(x => x.id === id);
+        if (!cari()) return;
+        const box = h('div', { class: 'sdr-modal sdr' }), panel = h('div', { class: 'pop' });
+        box.append(panel);
+        const onKey = e => { if (e.key === 'Escape' && document.querySelectorAll('.sdr-modal').length === 1) tutup(); };
+        function tutup() { box.remove(); document.removeEventListener('keydown', onKey); const y = body.scrollTop; gambarRekap(); body.scrollTop = y; }
+        document.addEventListener('keydown', onKey);
+        box.addEventListener('mousedown', e => { if (e.target === box) tutup(); });
+        const gambar = () => {
+            const it = cari();
+            panel.innerHTML = '';
+            if (!it) { panel.append(h('div', { class: 'pop-body' }, kosong('Pengajuan ini tidak ada lagi di rencana.')), h('div', { class: 'pop-ft' }, h('span', { class: 'sp' }), h('button', { class: 'btn pri', onclick: tutup }, 'Tutup'))); return; }
+            const [jl, jc] = JENIS_PJ[it.jenis];
+            const isi = h('div', { class: 'pop-body' });
+            panel.append(h('div', { class: 'pop-hd' },
+                h('div', {}, h('div', { class: 'row', style: { gap: '6px' } }, pill(jl, jc), it.paketId ? h('span', { class: 'mono' }, 'Kode RUP ' + it.paketId) : null, ...it.label.map(l => pill(l, LABEL_CLS[l] || 'p-mut'))),
+                    h('div', { class: 'pop-title' }, it.nama), h('div', { class: 'muted', style: { fontSize: '13px' } }, ringkasPj(it))),
+                h('button', { class: 'sdr-x dark', title: 'Tutup (Esc)', onclick: tutup }, '×')), isi);
+            if (it.jenis !== 'umumkan') isi.append(kartuAlasan(it));
+            if ((it.catatan || []).length || it.peringatan.length) isi.append(h('div', { class: 'fs' }, h('h4', {}, 'Dasar perubahan'), ...(it.catatan || []).map(t => h('div', { style: { fontSize: '13px' } }, '• ' + t)),
+                it.peringatan.length ? h('div', { class: 'warnbox', style: { margin: (it.catatan || []).length ? '10px 0 0' : 0 } }, ...it.peringatan.map(t => h('div', {}, t))) : null));
+            if (it.jenis === 'ubah') isi.append(peringatanLokasi(it.c.id, it.c.pk, gambar) || '', blokDraft({ judul: 'Isian revisi satu ke satu', sub: `Hasilnya paket berkode RUP baru (Final Draft) yang langsung diumumkan; kode ${it.paketId} tidak dipakai lagi.`, lama: pkLama(it.paketId), baru: it.c.pk, idEdit: it.c.id }));
+            if (it.jenis === 'titip') {
+                isi.append(h('div', { class: 'infobox', style: { margin: 0 } }, `Revisi Satu ke Banyak atas paket ${it.paketId}: draft #1 = paket ini (${it.chOn ? 'sekalian dikoreksi' : 'tanpa perubahan'}), draft #2 dst. = paket baru. Semua hasilnya berkode RUP baru (Final Draft) lalu diumumkan; kode ${it.paketId} tidak dipakai lagi.`));
+                const k1 = it.ch ? h('label', { class: 'row', style: { gap: '6px', fontSize: '13px' }, title: 'Koreksi paket ini (hasil keputusan) ikut dikirim sebagai draft #1' }, chk(it.chOn, v => { setPilih(it.ch.id, v); gambar(); }), 'koreksi') : null;
+                if (it.chOn) { const w = peringatanLokasi(it.ch.id, it.ch.pk, gambar); if (w) isi.append(w); }
+                isi.append(blokDraft({ judul: `Draft #1 — paket ${it.paketId}`, sub: it.chOn ? 'paket ini setelah dikoreksi' : 'paket ini tanpa perubahan', lama: pkLama(it.paketId), baru: it.chOn ? it.ch.pk : null, idEdit: it.chOn ? it.ch.id : null, kepala: k1 }));
+                it.anak.forEach((b, i) => {
+                    const on = dipilih(b), err = Rencana.periksa(b, { komponenId });
+                    const kb = h('label', { class: 'row', style: { gap: '6px', fontSize: '13px' }, title: 'Ikut dibuat' }, chk(on, v => { setPilih(b.id, v); gambar(); }), 'buat');
+                    isi.append(blokDraft({ judul: `Draft #${i + 2} — paket baru`, sub: `${b.nama} · Rp${fmt(b.total)} · ${b.jenis} · ${b.metode}${err.length ? ' · perlu diperbaiki: ' + err.join('; ') : ''}`, lama: null, baru: b, idEdit: b.id, paketBaru: true, kepala: kb, off: !on }));
+                });
+            }
+            if (it.jenis === 'umumkan') {
+                isi.append(h('div', { class: 'infobox', style: { margin: 0 } }, 'Final draft berikut lolos pemeriksaan (semua barisnya MAK pengadaan yang masih ada ruang di DIPA) dan diumumkan sekaligus lewat tombol Umumkan SiRUP.'));
+                isi.append(h('div', { class: 'tbl', style: { maxHeight: 'none' } }, h('table', { class: 't' }, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Kode RUP'), h('th', {}, 'Nama'), h('th', {}, 'MAK'), h('th', { class: 'n' }, 'Pagu'))),
+                    h('tbody', {}, it.daftar.map(u => { const p = (S.pakets || []).find(x => x.id === u.paketId) || {};
+                        return h('tr', {}, h('td', {}, chk(dipilih(u), v => { setPilih(u.id, v); gambar(); })), h('td', { class: 'mono' }, u.paketId), h('td', {}, u.nama), h('td', { class: 'mono', style: { fontSize: '12px' } }, (p.sumberDana || []).map(r => r.mak).join(', ')), h('td', { class: 'n' }, fmt(u.pagu))); })))));
+            }
+            if (it.jenis === 'batal' || it.jenis === 'batalFD') {
+                isi.append(h('div', { class: it.jenis === 'batal' ? 'warnbox' : 'infobox', style: { margin: 0 } }, it.jenis === 'batal'
+                    ? `Revisi → Pembatalan: paket menjadi Dibatalkan (tidak aktif) dan RUP terumumkan berkurang Rp${fmt(it.sebelum)}. Bila keliru, paket bisa diaktifkan kembali dari tab Jalankan (kode RUP tetap).`
+                    : 'Batalkan Final Draft: paket kembali menjadi draft di akun PPK untuk diperbaiki. RUP terumumkan tidak berubah; KPA tidak bisa mengembalikannya sendiri.'));
+                isi.append(blokDraft({ judul: 'Isian paket saat ini', lama: pkLama(it.paketId), baru: null }));
+            }
+            const kaki = h('div', { class: 'pop-ft' }, h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer' } }, chk(it.on, v => { it.setOn(v); gambar(); }), h('span', {}, 'Ikut antrean (tab Jalankan)')), h('span', { class: 'sp' }));
+            if (it.jenis === 'ubah' || it.jenis === 'titip') kaki.append(h('button', { class: 'btn', onclick: () => guard(() => lihatData(langkahDari(it))) }, 'Lihat data yang dikirim'));
+            kaki.append(h('button', { class: 'btn go', disabled: !S.ctx.isKPA, title: S.ctx.isKPA ? 'Kirim pengajuan ini saja ke SiRUP sekarang' : 'Hanya akun KPA', onclick: () => { tutup(); guard(() => ajukanSatu(it.id)); } }, '▶ Ajukan sekarang'),
+                h('button', { class: 'btn', onclick: tutup }, 'Tutup'));
+            panel.append(kaki);
+        };
+        gambar();
+        document.body.append(box);
+    }
+    function sekKekurangan(polos) {
         const r = S.ren;
         const aktif = r.kekurangan.filter(k => k.cara !== 'abaikan' || (S.atur[k.mak] || {}).cara === 'abaikan');
-        const box = h('div', { class: 'card' }, h('h3', {}, 'Cara menutup kekurangan pagu'),
+        const box = h('div', { class: polos ? '' : 'card' }, polos ? null : h('h3', {}, 'Cara menutup kekurangan pagu'),
             h('p', { class: 'note' }, `Default: bila MAK sudah punya paket umum (mis. "Belanja Bahan"), pagunya ditambah; bila belum atau paketnya spesifik, dibuat paket baru. Selisih ≤ Rp${fmt(S.cfg.ambangSelisih)} diabaikan.`));
         if (!aktif.length) box.append(h('div', { class: 'muted' }, 'Tidak ada kekurangan di atas ambang.'));
         else box.append(h('div', { class: 'tbl', style: { maxHeight: '340px' } }, h('table', { class: 't' },
@@ -849,7 +1177,7 @@ const UI = (() => {
     // Editor isian satu paket (baru atau hasil revisi). Perubahan langsung dicatat per id rencana.
     const JENIS = Object.keys(Sirup.JENIS_ID);
     const METODE = [...Object.keys(Sirup.METODE_ID), 'Dikecualikan'];
-    function editorIsian(id, pk, baru) {
+    function editorIsian(id, pk, baru, onUbah) {
         const tombol = h('button', { class: 'btn sm' }, '✎ Ubah isian');
         const status = h('span', { class: 'muted', style: { fontSize: '12.5px' } });
         const bd = h('div', { class: 'editor', style: { display: 'none' } });
@@ -861,7 +1189,7 @@ const UI = (() => {
         function isi() {
             const fs = (judul, ...x) => h('div', { class: 'fs' }, h('h4', {}, judul), ...x);
             const field = (label, input, hint) => h('div', { class: 'field' }, h('label', {}, label), input, hint ? h('div', { class: 'hint' }, hint) : null);
-            const ubah = k => { catatEdit(id, pk, k); ringkas(); };
+            const ubah = k => { catatEdit(id, pk, k); ringkas(); if (onUbah) onUbah(k); };
             if (!baru) { const t = h('input', { type: 'text', value: pk.nama, style: { width: '100%' } }); t.addEventListener('change', () => { pk.nama = t.value; ubah('nama'); }); bd.append(fs('Nama paket', t)); }
             // anggaran: paket baru → pagu per baris bisa diubah; paket existing → hasil keputusan (baca saja)
             const tb = h('tbody', {});
@@ -958,27 +1286,30 @@ const UI = (() => {
         delete x.items; delete x.kandidatHost; delete x.peringatan;
         return x;
     }
+    // Satu pengajuan → satu langkah antrean (isian disalin saat itu juga)
+    function langkahDari(it) {
+        const snap = id => { const p = S.pakets.find(x => x.id === id); return p ? { status: p.status, pagu: +p.pagu } : null; };
+        if (it.jenis === 'ubah') { const c = it.c; return { id: c.id, jenis: 'ubah', paketId: c.paketId, nama: c.nama, alasan: it.alasan, umumkanDulu: c.umumkanDulu, pk: siapkanPk(c.pk), snap: snap(c.paketId), sebelum: c.sebelum, sesudah: c.sesudah }; }
+        if (it.jenis === 'titip') {
+            const { t, ch, chOn } = it;
+            return { id: t.id, jenis: 'titip', paketId: t.hostId, nama: t.nama, draft1: chOn ? 'koreksi' : 'tetap', snap: snap(t.hostId), alasan: it.alasan,
+                pks: [chOn ? siapkanPk(ch.pk) : siapkanPk(t.pk1), ...it.anak.filter(dipilih).map(siapkanPk)], sebelum: t.pagu, sesudah: it.sesudah };
+        }
+        if (it.jenis === 'umumkan') {
+            const us = it.daftar.filter(dipilih), ids = us.map(u => u.paketId);
+            return { id: 'umumkan', jenis: 'umumkan', ids, nama: `${ids.length} final draft`, snap: Object.fromEntries(ids.map(i => [i, snap(i)])), sebelum: 0, sesudah: us.reduce((s, u) => s + u.pagu, 0) };
+        }
+        if (it.jenis === 'batal') { const c = it.c; return { id: c.id, jenis: 'batal', paketId: c.paketId, nama: c.nama, alasan: it.alasan, snap: snap(c.paketId), sebelum: c.sebelum, sesudah: 0 }; }
+        return { id: it.id, jenis: 'batalFD', paketId: it.paketId, nama: it.nama, alasan: it.alasan, snap: snap(it.paketId) };
+    }
     // Urutan aman: revisi 1→1 dan titipan 1→N lebih dulu, lalu umumkan final draft, pembatalan paling akhir.
     // Bila satu revisi gagal proses berhenti, sehingga paket yang akan digantikan belum terlanjur dibatalkan.
     function susunAntrean() {
-        const r = S.ren, q = [];
-        const snap = id => { const p = S.pakets.find(x => x.id === id); return p ? { status: p.status, pagu: +p.pagu } : null; };
-        const titipOn = new Set(r.titipan.filter(t => dipilih(t) && r.paketBaru.some(b => b.hostId === t.hostId && dipilih(b))).map(t => t.hostId));
-        const ubahList = r.perubahan.filter(c => dipilih(c) && c.jenis === 'ubah' && !titipOn.has(c.paketId));
-        for (const c of ubahList.filter(c => !c.umumkanDulu).concat(ubahList.filter(c => c.umumkanDulu)))
-            q.push({ id: c.id, jenis: 'ubah', paketId: c.paketId, nama: c.nama, alasan: c.alasan, umumkanDulu: c.umumkanDulu, pk: siapkanPk(c.pk), snap: snap(c.paketId), sebelum: c.sebelum, sesudah: c.sesudah });
-        for (const t of r.titipan.filter(t => titipOn.has(t.hostId))) {
-            const ch = r.perubahan.find(c => c.paketId === t.hostId && c.jenis === 'ubah' && dipilih(c));
-            const d1 = ch ? siapkanPk(ch.pk) : siapkanPk(t.pk1);
-            const baru = r.paketBaru.filter(b => b.hostId === t.hostId && dipilih(b)).map(siapkanPk);
-            q.push({ id: t.id, jenis: 'titip', paketId: t.hostId, nama: t.nama, draft1: ch ? 'koreksi' : 'tetap', snap: snap(t.hostId),
-                alasan: (ch ? ch.alasan + '; ' : '') + 'penambahan paket sesuai DIPA revisi terakhir', pks: [d1, ...baru], sebelum: t.pagu, sesudah: (ch ? ch.sesudah : t.pagu) + baru.reduce((s2, x) => s2 + x.total, 0) });
-        }
-        const ids = r.umumkan.filter(dipilih).map(u => u.paketId);
-        if (ids.length) q.push({ id: 'umumkan', jenis: 'umumkan', ids, nama: `${ids.length} final draft`, snap: Object.fromEntries(ids.map(i => [i, snap(i)])), sebelum: 0, sesudah: r.umumkan.filter(dipilih).reduce((s2, u) => s2 + u.pagu, 0) });
-        for (const c of r.perubahan.filter(c => dipilih(c) && c.jenis === 'batal')) q.push({ id: c.id, jenis: 'batal', paketId: c.paketId, nama: c.nama, alasan: c.alasan, snap: snap(c.paketId), sebelum: c.sebelum, sesudah: 0 });
-        for (const f of r.batalFD) q.push({ id: 'f:' + f.paketId, jenis: 'batalFD', paketId: f.paketId, nama: f.nama, alasan: 'Dikembalikan ke PPK: ' + f.alasan, snap: snap(f.paketId) });
-        return { dibuat: new Date().toISOString(), satker: S.ctx.kodeSatker, tahun: S.ctx.tahun, langkah: q.map(x => ({ ...x, status: 'menunggu' })) };
+        const pj = daftarPengajuan().filter(it => it.on && (it.jenis !== 'titip' || it.anak.some(dipilih)));
+        const ubah = pj.filter(it => it.jenis === 'ubah');
+        const urut = [...ubah.filter(it => !it.umumkanDulu), ...ubah.filter(it => it.umumkanDulu), ...['titip', 'umumkan', 'batal', 'batalFD'].flatMap(j => pj.filter(it => it.jenis === j))];
+        const langkah = urut.map(langkahDari).filter(L => L.jenis !== 'umumkan' || L.ids.length);
+        return { dibuat: new Date().toISOString(), satker: S.ctx.kodeSatker, tahun: S.ctx.tahun, langkah: langkah.map(x => ({ ...x, status: 'menunggu' })) };
     }
     const JENIS_LANGKAH = { batalFD: 'Kembalikan final draft ke PPK', batal: 'Batalkan paket', ubah: 'Revisi satu ke satu', titip: 'Revisi satu ke banyak', umumkan: 'Umumkan final draft' };
     const ST_LANGKAH = { menunggu: ['menunggu', 'p-mut'], berjalan: ['berjalan…', 'p-info'], selesai: ['selesai', 'p-ok'], gagal: ['gagal', 'p-bad'], dilewati: ['dilewati', 'p-warn'] };
@@ -1017,8 +1348,9 @@ const UI = (() => {
             if (L.jenis === 'ubah' || L.jenis === 'titip') aksi.append(h('button', { class: 'btn sm ghost', onclick: () => lihatData(L) }, 'Lihat data'));
             if (L.status === 'gagal') aksi.append(h('button', { class: 'btn sm', onclick: () => { L.status = 'selesai'; L.pesan = (L.pesan || '') + ' · ditandai selesai manual'; simpanAntre(); gambarRekap(); } }, 'Tandai selesai'),
                 h('button', { class: 'btn sm', onclick: () => { L.status = 'dilewati'; simpanAntre(); gambarRekap(); } }, 'Lewati'));
+            if (L.jenis === 'batal' && L.status === 'selesai' && !L.diaktifkan) aksi.append(h('button', { class: 'btn sm', disabled: !S.ctx.isKPA, title: 'Batalkan pembatalan: paket diaktifkan kembali (kode RUP tetap) lalu diumumkan ulang', onclick: () => guard(() => aktifkanKembali(L)) }, '↶ Aktifkan kembali'));
             tb.append(h('tr', {}, h('td', {}, String(i + 1)), h('td', {}, JENIS_LANGKAH[L.jenis]), h('td', {}, uraianLangkah(L)), h('td', { class: 'n' }, L.sebelum != null ? `${fmt(L.sebelum)} → ${fmt(L.sesudah)}` : ''),
-                h('td', {}, pill(st, cls), L.hasil ? h('div', { class: 'muted', style: { fontSize: '12px' } }, L.hasil) : null, L.pesan ? h('div', { style: { fontSize: '12px', color: '#b91c1c' } }, L.pesan) : null), h('td', {}, aksi)));
+                h('td', {}, pill(st, cls), L.diaktifkan ? [' ', pill('diaktifkan kembali', 'p-info')] : null, L.satuan ? [' ', pill('diajukan satuan', 'p-mut')] : null, L.hasil ? h('div', { class: 'muted', style: { fontSize: '12px' } }, L.hasil) : null, L.pesan ? h('div', { style: { fontSize: '12px', color: '#b91c1c' } }, L.pesan) : null), h('td', {}, aksi)));
         });
         return h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { style: { margin: 0 } }, 'Antrean eksekusi'), h('span', { class: 'muted' }, `disusun ${new Date(A.dibuat).toLocaleString('id-ID')}`), h('span', { style: { flex: 1 } }),
             h('button', { class: 'btn sm ghost', onclick: async () => { if (await confirmBox('Hapus antrean', '<p>Antrean dihapus dari peramban ini. Langkah yang sudah selesai di SiRUP tidak dibatalkan.</p>', 'Hapus')) { S.antre = null; simpanAntre(); gambarRekap(); } } }, 'Hapus antrean')),
@@ -1069,6 +1401,9 @@ const UI = (() => {
             `<ol>${daftar.map(L => `<li><b>${JENIS_LANGKAH[L.jenis]}</b> — ${esc(uraianLangkah(L))}</li>`).join('')}</ol>
             <p class="note">Semua langkah mengubah data SiRUP atas nama akun KPA ini. Hasil revisi (Final Draft) langsung diumumkan. Bila satu langkah gagal, proses berhenti dan langkah berikutnya tidak dijalankan.</p>`);
         if (!ok) return;
+        await eksekusi(daftar);
+    }
+    async function eksekusi(daftar) {
         let tersentuh = 0;
         try {
             for (const L of daftar) {
@@ -1094,6 +1429,47 @@ const UI = (() => {
             log('Paket RUP sudah dibaca ulang; rencana dihitung dari data terbaru.', 'o');
         } catch (e) { log(`Gagal membaca ulang paket setelah eksekusi (${e.message}). Klik "Baca ulang RUP" sebelum lanjut.`, 'e'); }
         gambarRekap();
+    }
+    // "Ajukan sekarang" dari popup: satu pengajuan langsung dikirim; dicatat di antrean supaya tampil di laporan
+    async function ajukanSatu(id) {
+        const it = daftarPengajuan().find(x => x.id === id);
+        if (!it) throw new Error('Pengajuan ini tidak ada lagi di rencana terbaru. Periksa daftar pengajuan.');
+        const fatal = kesiapan().out.filter(x => x.fatal);
+        if (fatal.length) throw new Error('Belum bisa dijalankan: ' + fatal.map(x => x.teks).join('; '));
+        const L0 = langkahDari(it);
+        if (L0.jenis === 'umumkan' && !L0.ids.length) throw new Error('Tidak ada final draft yang dicentang.');
+        if (L0.jenis === 'titip' && L0.pks.length < 2) throw new Error('Tidak ada paket baru yang dicentang untuk dititipkan.');
+        const salah = salahIsiLangkah(L0);
+        if (salah.length) throw new Error('Isian belum lengkap, tidak dikirim: ' + salah.join('; '));
+        const ok = await confirmBox(`Ajukan ke SiRUP: ${JENIS_LANGKAH[L0.jenis]}`, `<p><b>${esc(uraianLangkah(L0))}</b></p>${L0.alasan ? `<p>Alasan: ${esc(L0.alasan)}</p>` : ''}
+            <p class="note">Pengajuan ini langsung dikirim ke SiRUP atas nama akun KPA${L0.jenis === 'ubah' || L0.jenis === 'titip' ? '; hasil revisi (Final Draft) langsung diumumkan' : ''}. Pengajuan lain tidak ikut dijalankan.</p>`, 'Ajukan sekarang');
+        if (!ok) return;
+        if (!S.antre) S.antre = { dibuat: new Date().toISOString(), satker: S.ctx.kodeSatker, tahun: S.ctx.tahun, langkah: [] };
+        let L = S.antre.langkah.find(x => x.id === L0.id && (x.status === 'menunggu' || x.status === 'gagal'));
+        if (L) Object.assign(L, L0, { status: 'menunggu', pesan: '' });
+        else { L = { ...L0, status: 'menunggu', satuan: true }; S.antre.langkah.push(L); }
+        simpanAntre();
+        await eksekusi([L]);
+    }
+    // Paket yang dibatalkan lewat tool bisa dikembalikan: revisi "Aktifkan" SiRUP (kode tetap, jadi Final Draft) lalu umumkan
+    async function aktifkanKembali(L) {
+        const ok = await confirmBox('Aktifkan kembali paket', `<p>Paket <b>${esc(L.paketId)}</b> · ${esc(L.nama)} diaktifkan kembali lewat revisi "Aktifkan" SiRUP (kode RUP tetap, status menjadi Final Draft), lalu langsung diumumkan ulang.</p>
+            <p class="note">RUP terumumkan bertambah kembali Rp${fmt(L.sebelum)}.</p>`, 'Aktifkan & umumkan');
+        if (!ok) return;
+        const p0 = (await daftarKini()).get(L.paketId);
+        if (!p0 || p0.status !== '51') throw new Error(`Paket ${L.paketId} tidak berstatus Dibatalkan (sekarang ${p0 ? Analysis.ST[p0.status] || p0.status : 'tidak ada di daftar'}).`);
+        try {
+            await Sirup.aktifkanPaket(L.paketId, 'Pembatalan dibatalkan; paket tetap diperlukan sesuai DIPA');
+            let p = (await daftarKini()).get(L.paketId);
+            if (!p || p.status !== '2') throw new Error(`Paket ${L.paketId} belum kembali menjadi Final Draft (sekarang ${p ? Analysis.ST[p.status] || p.status : 'tidak ada di daftar'}).`);
+            await Sirup.umumkan([L.paketId]);
+            p = (await daftarKini()).get(L.paketId);
+            if (!p || p.status !== '3') throw new Error(`Paket ${L.paketId} sudah aktif sebagai Final Draft, tetapi belum terumumkan. Umumkan manual di SiRUP.`);
+            L.diaktifkan = new Date().toISOString();
+            L.hasil = (L.hasil ? L.hasil + ' · ' : '') + 'diaktifkan kembali & diumumkan';
+            simpanAntre();
+            log(`Paket ${L.paketId} diaktifkan kembali dan diumumkan.`, 'o');
+        } finally { await segarkanSetelahEksekusi(); }
     }
     async function jalankanLangkah(L) {
         const salahIsi = salahIsiLangkah(L);

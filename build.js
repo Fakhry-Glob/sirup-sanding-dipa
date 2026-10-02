@@ -10,8 +10,8 @@ const version = (header.match(/@version\s+(\S+)/) || [])[1];
 const body = [
     `const APP_VERSION = '${version}';`,
     `const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';`,
-    src('ui_css.js'), src('dipa_parser.js'), src('classify.js'), src('analysis.js'), src('rencana.js'), src('sirup_api.js'), src('ui.js'),
-    `window.__sdrDebug = { Sirup, Analysis, Rencana, Classify, DipaParser, UI }; // diagnostik lewat DevTools`,
+    src('ui_css.js'), src('dipa_parser.js'), src('classify.js'), src('analysis.js'), src('rencana.js'), src('pkkr.js'), src('sirup_api.js'), src('ui.js'),
+    `window.__sdrDebug = { Sirup, Analysis, Rencana, PkkrPlan, Classify, DipaParser, UI }; // diagnostik lewat DevTools`,
     `if (/\\/sirup\\//.test(location.pathname) && !/loginctr|public\\//.test(location.pathname)) UI.mount();`,
 ].join('\n\n');
 const out = `${header}\n(function () {\n'use strict';\n${body}\n})();\n`;

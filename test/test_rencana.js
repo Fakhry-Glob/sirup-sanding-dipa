@@ -11,12 +11,12 @@ const rinci = process.argv.includes('--rinci');
 const pkkr = D.pkkr();
 const komponenId = mak => { const p = mak.split('.'); const sub = pkkr.get(p.slice(0, 6).join('.')); if (sub && sub.parentId) return sub.parentId; const k = pkkr.get(p.slice(0, 5).join('.')); return k ? k.id : null; };
 const cfg = { plBarjas: 200e6, plKonstruksi: 400e6, plKonsultansi: 100e6, metodeEO: 'Tender', ambangSelisih: 1e6, ambangKeputusan: 100e6, grupPaketBaru: 'sub', maxPaketPerRevisi: 15 };
-function jalan(keputusan, atur, opsi = {}) {
+function jalan(keputusan, atur, opsi = {}, ekstra = []) {
     const dipa = D.dipa();
     const cekKep = {};
     for (const [k, v] of Object.entries(keputusan || {})) if (k.startsWith('cek:') && v.opsi) cekKep[k.slice(4)] = v.opsi;
     const { nodes, akun } = A.buildDipa(dipa, {}, { cekKeputusan: cekKep });
-    const pakets = D.pakets();
+    const pakets = D.pakets().concat(ekstra);
     A.sanding(akun, pakets);
     return R.susun({ akunMap: akun, pakets, dipaNodes: nodes, cfg: { ...cfg, ...opsi }, tahun: 2026, hariIni: new Date('2026-09-30'), keputusan, atur,
         lokasiSatker: D.LOKASI_SATKER, lokasiRkk: { 'KOTA JAKARTA PUSAT': { id_provinsi: 11, id_kabupaten: 14748, prov: 'DKI Jakarta', kab: 'Jakarta Pusat (Kota)' } }, komponenId });
@@ -101,4 +101,44 @@ assert(rD.batalFD.some(x => x.sumber === ID533), 'final draft kelompok dikembali
 const k1 = r0.kekurangan.find(k => k.cara === 'tambah');
 const rE = jalan({}, { [k1.mak]: { cara: 'baru' } });
 assert(rE.paketBaru.some(b => b.akun.includes(k1.mak)), 'override cara=baru dihormati');
+
+// ── Skenario F: paket yang sudah tidak relevan → default dikembalikan/dibatalkan ──
+{
+    const dipa = D.dipa();
+    const { akun } = A.buildDipa(dipa, {}, {});
+    A.sanding(akun, D.pakets());
+    const U0 = D.pakets().filter(p => p.status === '3' && p.aktif !== 'false');
+    const baris = (mak, pagu, i) => ({ id: 'x' + i, mak, pagu, idKomponen: komponenId(mak), sumber: 2, danaApbn: 'A', asal: 'K8', asalSatker: 14564, ta: 2026, kodeInstansi: '032', kodeEselon: '12', kodeSatker: '626402' });
+    const fd = (id, nama, rows) => ({ id, status: '2', aktif: 'true', nama, pagu: rows.reduce((t, r) => t + r.pagu, 0), sumberDana: rows, jenisPengadaan: [{ jenis: 'Barang', pagu: rows.reduce((t, r) => t + r.pagu, 0) }] });
+    // (1) final draft non-pengadaan murni
+    const np = [...akun.values()].find(a => a.P <= 0 && a.CEK <= 0 && a.pagu > 5e6);
+    // (2) final draft kembar paket terumumkan di MAK yang sudah penuh
+    let penuh = null, kembar = null;
+    for (const p of U0) for (const r of p.sumberDana || []) { const a = akun.get(r.mak); if (!penuh && a && a.P > 0 && a.rupU >= a.P - 1000 && +r.pagu > 10e6) { penuh = r; kembar = p; } }
+    // (3) final draft kembar di MAK yang masih longgar → tetap diumumkan
+    let longgar = null;
+    for (const p of U0) for (const r of p.sumberDana || []) { const a = akun.get(r.mak); if (!longgar && a && a.P > 0 && a.P - a.rupU > +r.pagu + 5e6 && +r.pagu > 5e6 && r.mak !== (penuh && penuh.mak)) longgar = r; }
+    assert(np && penuh && longgar, 'data uji F tidak lengkap');
+    // (4) MAK lama tanpa padanan bernilai kecil: paket terumumkan + final draft-nya
+    const makMati = 'DL.2376.RAA.711.301.GA.529991';
+    const ekstra = [
+        fd('91000001', 'FD non-pengadaan', [baris(np.key, 6e6, 1)]),
+        fd('91000002', 'FD kembar penuh', [baris(penuh.mak, +penuh.pagu, 2)]),
+        fd('91000003', 'FD kembar longgar', [baris(longgar.mak, +longgar.pagu, 3)]),
+        { ...fd('91000004', 'Paket MAK mati', [baris(makMati, 20e6, 4)]), status: '3' },
+        fd('91000005', 'FD MAK mati', [baris(makMati, 5e6, 5)]),
+    ];
+    const rF = jalan({}, {}, {}, ekstra);
+    const kfd = rF.kartu.find(k => k.id === 'fd');
+    const pilFD = id => (kfd.daftar.find(x => x.paketId === id) || {}).pilihan;
+    assert.strictEqual(pilFD('91000001'), 'kembalikan', 'FD non-pengadaan default dikembalikan');
+    assert.strictEqual(pilFD('91000002'), 'kembalikan', `FD kembar ${kembar.id} di MAK penuh default dikembalikan`);
+    assert(rF.umumkan.some(u => u.paketId === '91000003'), 'FD kembar di MAK longgar tetap diumumkan');
+    const kTP = rF.kartu.find(k => k.jenis === 'TANPA_PADANAN' && k.makLama.includes(makMati));
+    assert(kTP && kTP.pilihan === 'keluarkan' && kTP.otomatis, 'MAK mati < ambang default dikeluarkan');
+    assert(rF.perubahan.some(c => c.paketId === '91000004' && c.jenis === 'batal'), 'paket MAK mati dibatalkan');
+    assert(rF.batalFD.some(b => b.paketId === '91000005' && b.sumber === kTP.id), 'FD MAK mati dikembalikan ke PPK');
+    assert(['91000001', '91000002'].every(id => rF.batalFD.some(b => b.paketId === id)), 'FD tidak relevan masuk antrean kembalikan');
+    console.log(`\n== Paket tidak relevan: FD NP ${np.key}, FD kembar ${penuh.mak} (paket ${kembar.id}), FD longgar ${longgar.mak}, MAK mati -> lulus`);
+}
 console.log('\nSemua uji rencana lulus.');

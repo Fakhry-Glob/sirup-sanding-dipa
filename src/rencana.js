@@ -230,8 +230,11 @@ const Rencana = (() => {
                     ringkas: `${new Set(g.rows.map(x => x.p.id)).size} paket (Rp${fmt(gU)} terumumkan${gFD ? `, Rp${fmt(gFD)} final draft` : ''}) memakai ${makLama.join(', ')} yang tidak ada di DIPA, dan kegiatan ${keg} tidak punya akun ${code}`,
                     paket: paketGrup(g.rows), opsi: [
                         { id: 'keluarkan', label: 'Keluarkan dari RUP', ket: 'Baris MAK ini dihapus; paket yang tidak punya baris lain dibatalkan', dampak: -gU },
-                        { id: 'biarkan', label: 'Biarkan', ket: 'Tidak diubah', dampak: 0 }] }, null);
-                if (k.pilihan === 'keluarkan') for (const x of rowsU) { const u = getUbah(x.p); const row = rowOf(u, x.r); if (row) row.pagu = 0; u.sumber.add('pindah'); u.catatan.push(`Baris ${x.r.mak} (Rp${fmt(x.r.pagu)}) dikeluarkan: MAK tidak ada di DIPA`); }
+                        { id: 'biarkan', label: 'Biarkan', ket: 'Tidak diubah', dampak: 0 }] }, gU + gFD < BESAR ? 'keluarkan' : null);
+                if (k.pilihan === 'keluarkan') {
+                    for (const x of rowsU) { const u = getUbah(x.p); const row = rowOf(u, x.r); if (row) row.pagu = 0; u.sumber.add('pindah'); u.catatan.push(`Baris ${x.r.mak} (Rp${fmt(x.r.pagu)}) dikeluarkan: MAK tidak ada di DIPA`); }
+                    for (const p of new Set(rowsFD.map(x => x.p))) if (!batalFD.some(b => b.paketId === p.id)) batalFD.push({ paketId: p.id, nama: p.nama, pagu: +p.pagu, alasan: `MAK ${makLama.join(', ')} tidak ada di DIPA revisi terakhir`, sumber: id });
+                }
                 if (k.pilihan == null) for (const x of g.rows) paketTertahan.add(x.p.id);
                 continue;
             }
@@ -389,27 +392,38 @@ const Rencana = (() => {
         // ── 5. Final draft ───────────────────────────────────────────────
         const umumkan = [], fdMasalah = [];
         const dalamGrup = new Set([...grup.values()].flatMap(g => g.rows.map(x => x.p.id)));
+        const kembar = new Map(); // MAK|pagu (dibulatkan Rp100 rb) → paket terumumkan
+        for (const q of U) for (const r of rowsOf(q)) kembar.set(`${r.mak}|${Math.round(+r.pagu / 1e5)}`, q);
         for (const p of FD.slice().sort((a, b) => b.pagu - a.pagu)) {
             if (dalamGrup.has(p.id)) continue;
             const rows = rowsOf(p);
             const masalah = [];
+            let ganda = null;   // hanya dianggap ganda bila MAK-nya juga sudah penuh (dua paket sah boleh bernilai sama)
             for (const r of rows) {
                 const kls = kelasRow(r);
                 if (kls === 'NP') masalah.push(`${r.mak} non-pengadaan`);
                 else if (kls === 'CEK') masalah.push(`${r.mak} masih "perlu dicek"`);
-                else if (kls === 'P') { const a = akunMap.get(r.mak); if (rup.get(r.mak) + +r.pagu > a.P + TOL) masalah.push(`${r.mak} sudah penuh (RUP Rp${fmt(rup.get(r.mak))} dari pagu Rp${fmt(a.P)})`); }
+                else if (kls === 'P') {
+                    const a = akunMap.get(r.mak);
+                    if (rup.get(r.mak) + +r.pagu > a.P + TOL) {
+                        const q = kembar.get(`${r.mak}|${Math.round(+r.pagu / 1e5)}`);
+                        if (q) { ganda = ganda || q; masalah.push(`${r.mak} sudah penuh dan kemungkinan ganda dengan paket terumumkan ${q.id} (${potong(q.nama, 40)})`); }
+                        else masalah.push(`${r.mak} sudah penuh (RUP Rp${fmt(rup.get(r.mak))} dari pagu Rp${fmt(a.P)})`);
+                    }
+                }
             }
             if (!rows.length) masalah.push('tanpa baris anggaran');
-            if (masalah.length) fdMasalah.push({ paketId: p.id, nama: p.nama, pagu: +p.pagu, masalah });
+            const tidakRelevan = !rows.length || !!ganda || rows.every(r => kelasRow(r) === 'NP');
+            if (masalah.length) fdMasalah.push({ paketId: p.id, nama: p.nama, pagu: +p.pagu, masalah, saran: tidakRelevan ? 'kembalikan' : 'biarkan' });
             else { umumkan.push({ id: 'u:' + p.id, paketId: p.id, nama: p.nama, pagu: +p.pagu, pilih: true }); for (const r of rows) addRup(r.mak, +r.pagu); }
         }
         if (fdMasalah.length) {
             const d = kep.fd || {};
             const pil = d.pilih || {};
             kartu.push({ id: 'fd', jenis: 'FD', judul: 'Final draft bermasalah', ringkas: `${fdMasalah.length} final draft Rp${fmt(sum(fdMasalah, x => x.pagu))} tidak bisa diumumkan apa adanya`,
-                daftar: fdMasalah.map(x => ({ ...x, pilihan: pil[x.paketId] || 'biarkan' })), pilihan: 'per-paket', diputuskan: true, otomatis: d.pilih == null, param: d,
+                daftar: fdMasalah.map(x => ({ ...x, pilihan: pil[x.paketId] || x.saran })), pilihan: 'per-paket', diputuskan: true, otomatis: d.pilih == null, param: d,
                 opsi: [{ id: 'biarkan', label: 'Biarkan' }, { id: 'kembalikan', label: 'Kembalikan ke PPK' }] });
-            for (const x of fdMasalah) if (pil[x.paketId] === 'kembalikan') batalFD.push({ paketId: x.paketId, nama: x.nama, pagu: x.pagu, alasan: x.masalah.join('; '), sumber: 'fd' });
+            for (const x of fdMasalah) if ((pil[x.paketId] || x.saran) === 'kembalikan') batalFD.push({ paketId: x.paketId, nama: x.nama, pagu: x.pagu, alasan: x.masalah.join('; '), sumber: 'fd' });
         }
 
         // ── 6. Kekurangan: tambah pagu paket umum, paket baru, atau abaikan ──
@@ -729,7 +743,8 @@ const Rencana = (() => {
         const tot = sum(pk.anggaran, a => +a.pagu || 0);
         if (tot <= 0) err.push('pagu 0');
         for (const a of pk.anggaran) {
-            if (!/^[A-Z]{2}\.\d{4}\.[A-Z0-9]{3}\.[A-Z0-9]{3}\.\d{3}\.[A-Z0-9]{1,2}\.\d{6}$/.test(a.mak)) err.push(`MAK ${a.mak} tidak 7 segmen`);
+            // kode komponen bisa alfanumerik (mis. placeholder "ZZ1"), bukan hanya 3 angka
+            if (!/^[A-Z]{2}\.\d{4}\.[A-Z0-9]{3}\.[A-Z0-9]{3}\.[A-Z0-9]{3}\.[A-Z0-9]{1,2}\.\d{6}$/.test(a.mak)) err.push(`MAK ${a.mak} tidak 7 segmen`);
             if (!(+a.pagu > 0)) err.push(`pagu baris ${a.mak} kosong`);
             if (ctx && ctx.komponenId && !(a.idKomponen || ctx.komponenId(a.mak))) err.push(`komponen ${seg(a.mak, 5)} belum ada di PKKR`);
         }
