@@ -22,5 +22,5 @@ fs.writeFileSync(path.join(__dirname, 'dist', 'sirup_sanding_dipa.user.js'), out
 const meta = header.match(/\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==/);
 if (!meta) throw new Error('Blok metadata tidak ditemukan di src/header.js');
 fs.writeFileSync(path.join(__dirname, 'dist', 'sirup_sanding_dipa.meta.js'), meta[0] + '\n');
-console.log('dist/sirup_sanding_dipa.user.js', out.length, 'bytes, versi', version);
-console.log('dist/sirup_sanding_dipa.meta.js', meta[0].length + 1, 'bytes');
+console.log('dist/sirup_sanding_dipa.user.js', Buffer.byteLength(out), 'byte, versi', version);
+console.log('dist/sirup_sanding_dipa.meta.js', Buffer.byteLength(meta[0]) + 1, 'byte');
