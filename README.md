@@ -97,15 +97,19 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 
 - Hanya node **Manual** yang diubah. Node hasil integrasi SAKTI terkunci dan hanya ditampilkan sebagai informasi.
 - Pagu target:
-  - salinan induk rantai Manual (kode sama dengan node Integrasi, mis. Program "… (Manual)") = jumlah pagu cabang Manual di bawahnya;
-  - salinan tanpa anak Manual dan cabang Manual biasa = pagu DIPA node itu.
+  - salinan induk rantai Manual (kode sama dengan node Integrasi, mis. Program "… (Manual)") = jumlah pagu cabang Manual di bawahnya. Anak yang sudah tidak ada di DIPA tetapi tidak bisa dinonaktifkan (dipakai paket, atau paket belum dibaca) tetap dihitung, karena SiRUP menolak induk yang lebih kecil dari jumlah anaknya;
+  - salinan Sub Komponen (daun) dan cabang Manual biasa = pagu DIPA node itu;
+  - salinan non-daun yang belum punya anak Manual (rantai belum selesai dibuat, mis. "Tambahkan cabang" gagal di tengah) dibiarkan;
+  - penurunan pagu salinan ditahan selama masih ada cabang DIPA (pengadaan) di bawahnya yang belum dibuat.
 - Nama: catatan SAKTI berbentuk "[…]" dibuang; cabang Manual mengikuti uraian DIPA; salinan Program/Kegiatan diberi akhiran "(Manual)".
 - Node Manual yang tidak ada lagi di DIPA dinonaktifkan **hanya bila tidak dipakai**:
   - paket penyedia aktif yang baris anggarannya memakai id komponen di bawah node itu (atau MAK berawalan kode node, untuk cabang non-salinan);
   - paket swakelola aktif yang jalur komponennya (kolom daftar paket) berada di bawah node itu.
   Sebelum menonaktifkan, daftar paket dibaca ulang; bila berubah, detail paket dibaca ulang dulu. Tanpa paket RUP terbaca, tidak ada node yang bisa dinonaktifkan.
 - Urutan eksekusi: nonaktifkan (anak dulu) → turunkan pagu (anak dulu) → naikkan pagu / ganti nama (induk dulu).
-- Form "Ubah" dan dialog "Nonaktifkan" dibaca dari SiRUP saat eksekusi dan dikirim apa adanya; hanya nama/pagu (dan alasan bila kosong) yang diganti. Hasil ubah diverifikasi dengan membaca form lagi; hasil nonaktifkan diverifikasi dengan membaca ulang PKKR.
+- Form "Ubah" dan dialog "Nonaktifkan" dibaca dari SiRUP saat eksekusi dan dikirim apa adanya; yang diganti hanya nama/pagu dan **alasan baku** (`id_predifine`: 2 Penambahan Anggaran bila naik, 1 Pengurangan Anggaran bila turun, 4 Kesalahan Penulisan bila hanya nama). Hasil ubah diverifikasi dengan membaca form lagi (sekaligus menangkap pesan SiRUP); hasil nonaktifkan diverifikasi dengan membaca ulang PKKR.
+- Yang dijalankan hanya baris yang tampil di tabel. Bila PKKR berubah sejak tabel digambar, tabel diperbarui dan tidak ada yang dijalankan.
+- **Tambah cabang** (tombol di atas) juga mengikuti aturan anak ≤ induk: induk Manual yang sudah ada (mis. Program DL "(Manual)" yang sudah penuh oleh Kegiatan 2376) dinaikkan dulu dari atas ke bawah, baru node baru dibuat. Setelah proses (berhasil atau gagal di tengah) PKKR selalu dibaca ulang.
 - **Kelebihan RUP sekecil apa pun dipotong** (di atas Rp1.000), karena RUP di atas pagu DIPA membuat IKU > 100%, yang
   dikurangkan dari capaian. Ambang Rp1 jt hanya berlaku untuk kekurangan (supaya tidak ada paket baru yang sangat kecil).
 - Teks yang dikirim ke SiRUP memakai tanda baca ASCII (`-`, `>`, `x`, `...`) supaya aman di ekspor/sistem lain.
@@ -134,6 +138,9 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 - MAK paket = `id_komponen` (id node Komponen PKKR) + teks `SUB.AKUN`. Karena itu cabang PKKR harus ada terlebih dahulu.
 - Node PKKR hasil integrasi terkunci (nama/kode/pagu readonly), hanya PPK-nya yang bisa diubah.
 - Node PKKR Manual punya tautan Ubah (`programctr/edit{Program,Kegiatan,Output,SubOutput,Komponen,SubKomponen}`, form ke `programctr/simpan…` dengan `isEdit=true`) dan Nonaktifkan (`programctr/delete…Confirm?id=`, form konfirmasinya tanpa `method` = GET ke `programctr/delete…`).
+- **Jumlah pagu anak tidak boleh melebihi pagu induk.** Tambah node yang melanggarnya ditolak tanpa pesan, dengan redirect yang sama seperti berhasil (ke `index…` level itu). Rekaman: 30 Sep 13:46 KRO RAA Rp64,59 M di bawah Kegiatan Integrasi DL.2376 (pagu Rp1,24 M); 2 Okt 16:10 Kegiatan 2375 Rp24 M di bawah Program DL "(Manual)" yang sudah penuh oleh Kegiatan 2376.
+- Form Ubah PKKR di semua level wajib memilih alasan baku `…id_predifine` (1 Pengurangan Anggaran, 2 Penambahan Anggaran, 3 Pembatalan, 4 Kesalahan Penulisan, 5 Lainnya, 6 Delegasi kepada PPK). Tanpa pilihan ini SiRUP kembali ke form ubah dan tidak menyimpan (2 Okt 16:11, Program WA "(Manual)").
+- Pesan flash SiRUP hanya hidup untuk satu permintaan berikutnya. Tool membaca halaman tujuan redirect tepat setelah simpan supaya pesannya tidak hilang.
 - Paket yang dibatalkan (status 51, tidak aktif) hanya punya pilihan revisi "aktif". Hasilnya Final Draft berkode sama (rekaman 2 Okt 2026, paket latihan 67984388 → 68014121).
 
 ## Batasan / belum diuji di produksi
@@ -143,11 +150,12 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 - Paket swakelola hanya dihitung jumlahnya, belum disandingkan per MAK.
 - Kelebihan besar (mis. modernisasi tahun jamak) tidak pernah dipotong otomatis. Kartunya wajib diputuskan pengguna.
 - Revisi 1→1 dan 1→N (draft #1 dikoreksi) sudah dijalankan tool di produksi (653526, 1 Okt 2026). Umumkan, 1→1, batal, dan aktifkan kembali sudah dijalankan pada paket latihan 626402 (67984388 → 68014121, 2 Okt 2026) dengan alur permintaan yang sama dengan fungsi tool. "Umumkan lalu revisi" untuk final draft, popup "Ajukan sekarang", dan tombol "Aktifkan kembali" (v1.4.0) baru diuji di halaman uji.
-- **Ubah dan nonaktifkan PKKR Manual belum pernah dijalankan di produksi.** Mulai dengan "Jalankan 1 penyesuaian", lalu cek di Kelola PKKR SiRUP. Belum diketahui apakah node yang dinonaktifkan masih ikut terbaca di daftar PKKR; tool hanya memberi peringatan bila masih terbaca.
+- **Ubah dan nonaktifkan PKKR Manual belum pernah berhasil dijalankan di produksi.** Percobaan pertama (2 Okt 2026, v1.4.0) gagal karena alasan baku belum dikirim; diperbaiki di v1.4.1. Mulai dengan "Jalankan 1 penyesuaian", lalu cek di Kelola PKKR SiRUP. Belum diketahui apakah node yang dinonaktifkan masih ikut terbaca di daftar PKKR; tool hanya memberi peringatan bila masih terbaca.
+- Kenaikan besar pagu Program "(Manual)" (mis. DL Rp64,59 M → Rp418,83 M untuk RBJ + cabang 2375) belum pernah dicoba. Bila SiRUP punya batas lain (mis. total pagu program terhadap pagu satker), pesannya sekarang ikut ditampilkan.
 
 ## Merilis pembaruan
 
-1. Naikkan `@version` di `src/header.js`, misalnya 1.4.0 → 1.4.1. Tanpa ini, pengguna tidak menerima pembaruan.
+1. Naikkan `@version` di `src/header.js`, misalnya 1.4.1 → 1.4.2. Tanpa ini, pengguna tidak menerima pembaruan.
 2. Jalankan `node build.js`. Perintah ini menulis `dist/sirup_sanding_dipa.user.js` dan `dist/sirup_sanding_dipa.meta.js` dari header yang sama.
 3. Commit **kedua file `dist/`** bersama perubahan `src/`, lalu push ke `main`.
 

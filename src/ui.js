@@ -205,6 +205,7 @@ const UI = (() => {
             await loadPkkr(false);
             ensureAnalysis();
             const diff = Analysis.diffPkkr(S.dipa.nodes, S.an.akun, S.pkkr);
+            S.pkkrTertunda = diff.baru.filter(n => n.pengadaan > 0).map(n => n.key);
             const lvName = { prog: 'Program', keg: 'Kegiatan', kro: 'KRO', ro: 'RO', komp: 'Komponen', sub: 'Sub Komponen' };
             box.append(h('div', { class: 'kpis', style: { marginTop: '10px' } },
                 kpi(String(S.pkkr.size), 'Node PKKR di SiRUP'), kpi(String(diff.baru.length), 'Cabang DIPA belum ada di PKKR'),
@@ -245,33 +246,10 @@ const UI = (() => {
         log(`PKKR terbaca: ${S.pkkr.size} node.`, 'o');
         S.an = null;
     }
-    // Cara BPPP Tegal: SiRUP menolak cabang Manual di bawah node Integrasi (pagu integrasi beku di
-    // nilai lama). Cabang baru dibuat dalam rantai PKKR Manual paralel mulai dari Program, dengan kode
-    // sama (MAK paket tetap identik) dan pagu tiap salinan = jumlah pagu cabang baru di bawahnya.
-    function rencanaManual(nodes) {
-        const pilih = nodes.filter(n => n.pilih);
-        const keys = new Set(pilih.map(n => n.key));
-        const LVN = ['prog', 'keg', 'kro', 'ro', 'komp', 'sub'];
-        const plan = new Map();
-        // puncak cabang baru: node terpilih yang induknya tidak ikut dipilih
-        const puncak = pilih.filter(n => !keys.has(n.parentKey));
-        for (const top of puncak) {
-            const parts = top.key.split('.');
-            for (let i = 1; i < parts.length; i++) {
-                const k = parts.slice(0, i).join('.');
-                const ada = S.pkkr.get(k);
-                const sudahManual = ada && (ada.manual || ada.manualTwin);
-                if (sudahManual) continue;                       // rantai Manual sudah ada di level ini
-                const d = S.dipa.nodes.get(k) || {};
-                const x = plan.get(k) || { key: k, level: LVN[i - 1], kode: parts[i - 1], parentKey: parts.slice(0, i - 1).join('.'),
-                    nama: ((ada && ada.nama) || d.uraian || '').replace(/\s*\(Manual\)$/, '') + (i <= 2 ? ' (Manual)' : ''), pagu: 0, salinan: true };
-                x.pagu += top.pagu || 0;
-                plan.set(k, x);
-            }
-        }
-        for (const n of pilih) plan.set(n.key, { ...n, salinan: false });
-        return [...plan.values()].sort((a, b) => a.key.split('.').length - b.key.split('.').length || a.key.localeCompare(b.key));
-    }
+    // Cara BPPP Tegal: SiRUP menolak cabang Manual di bawah node Integrasi (pagu integrasi beku di nilai lama).
+    // Cabang baru dibuat dalam rantai PKKR Manual paralel mulai dari Program, dengan kode sama (MAK paket tetap
+    // identik). Rencananya dari PkkrPlan.rencanaTambah: salinan induk yang dibuat + induk Manual yang sudah ada
+    // dan harus dinaikkan dulu (SiRUP diam-diam menolak node yang membuat jumlah pagu anak melebihi induknya).
     // id induk di rantai Manual (salinan terbaru), atau node Manual yang sudah ada
     function indukManual(key) {
         const n = key && S.pkkr.get(key);
@@ -279,37 +257,59 @@ const UI = (() => {
         if (n.manual) return n;
         return n.manualTwin || null;
     }
-    async function runPkkr(nodes, idPpk) {
-        const rencana = rencanaManual(nodes);
-        if (!rencana.length) return;
-        const lv = { prog: 'Program', keg: 'Kegiatan', kro: 'KRO', ro: 'RO', komp: 'Komponen', sub: 'Sub Komponen' };
-        const ok = await confirmBox('Tambah cabang PKKR (rantai Manual paralel)', `<p>SiRUP menolak cabang Manual di bawah node Integrasi, jadi cabang baru dibuat di <b>rantai PKKR Manual paralel</b> mulai dari Program (cara BPPP Tegal). Kode sama dengan DIPA, sehingga MAK paket tetap sama.</p>
-            <div class="tbl"><table class="t"><tr><th>Level</th><th>Kode</th><th>Nama</th><th class="n">Pagu</th><th></th></tr>${rencana.map(n => `<tr><td>${lv[n.level]}</td><td class="mono">${esc(n.key)}</td><td>${esc(n.nama)}</td><td class="n">${fmt(n.pagu)}</td><td>${n.salinan ? '<span class="pill p-info">salinan induk</span>' : '<span class="pill p-ok">cabang baru</span>'}</td></tr>`).join('')}</table></div>
-            <p class="note">${rencana.length} node akan dibuat. Tindakan ini mengubah data SiRUP; hapus manual lewat Kelola PKKR bila salah.</p>`);
-        if (!ok) return;
-        for (const n of rencana) {
-            if (S.stop) break;
-            const parent = n.level === 'prog' ? null : indukManual(n.parentKey);
-            if (n.level !== 'prog' && !parent) throw new Error(`Induk Manual ${n.parentKey} belum ada — proses dihentikan.`);
-            if (!n.nama) throw new Error(`Nama ${n.key} kosong — isi dulu di tabel.`);
-            const rs = await Sirup.tambahPkkr(S.ctx, n, parent && parent.id, idPpk);
-            const id = await Sirup.cariNodeBaru(S.ctx, n.level, parent && parent.id, n.kode);
-            const lama = S.pkkr.get(n.key);
-            if (!id || (lama && !lama.manual && lama.id === id) || (lama && lama.manualTwin && lama.manualTwin.id === id && n.salinan === false)) {
-                const form = { prog: 'formprogram', keg: `formkegiatan?idProgram=${parent && parent.id}`, kro: `formoutput?idKegiatan=${parent && parent.id}`, ro: `formsuboutput?idOutput=${parent && parent.id}`, komp: `formkomponen?idSubOutput=${parent && parent.id}`, sub: `formsubkomponen?idKomponen=${parent && parent.id}` }[n.level];
-                const flash = await Sirup.bacaFlash(`/sirup/programctr/${form}`);
-                const isiHal = rs && !rs.redirected ? ' ' + (await rs.text()).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 200) : '';
-                throw new Error(`SiRUP tidak menyimpan ${lv[n.level]} ${n.key}${parent ? ` di bawah ${parent.key} (id ${parent.id})` : ''}. ${flash ? 'Pesan SiRUP: ' + flash : 'SiRUP tidak memberi pesan.'}${isiHal}`);
-            }
-            const node = { id, level: n.level, kode: n.kode, nama: n.nama, pagu: n.pagu, key: n.key, manual: true, parentId: parent && parent.id };
-            if (lama && !lama.manual) lama.manualTwin = node; else S.pkkr.set(n.key, node);
-            log(`PKKR Manual + ${lv[n.level]} ${n.key} (id ${id})`, 'o');
-            await Sirup.sleep(S.cfg.jeda);
+    // jumlah pagu anak Manual langsung di bawah node Manual `p` (untuk pesan kegagalan)
+    function paguAnakManual(p) {
+        let t = 0;
+        for (const [k, n] of S.pkkr) {
+            const m = n.manual ? n : n.manualTwin;
+            if (m && k.startsWith(p.key + '.') && k.split('.').length === p.key.split('.').length + 1 && String(m.parentId) === String(p.id)) t += +m.pagu || 0;
         }
-        log('Rantai PKKR Manual selesai. Membaca ulang PKKR…', 'o');
-        await loadPkkr(true);
-        S.an = null;
-        go(1);
+        return t;
+    }
+    async function runPkkr(nodes, idPpk) {
+        const { buat, naik } = PkkrPlan.rencanaTambah({ pilih: nodes.filter(n => n.pilih), pkkr: S.pkkr, dipaNodes: S.dipa.nodes });
+        if (!buat.length) return;
+        const lv = LV_NAMA;
+        const ok = await confirmBox('Tambah cabang PKKR (rantai Manual paralel)', `<p>SiRUP menolak cabang Manual di bawah node Integrasi, jadi cabang baru dibuat di <b>rantai PKKR Manual paralel</b> mulai dari Program (cara BPPP Tegal). Kode sama dengan DIPA, sehingga MAK paket tetap sama.</p>
+            ${naik.length ? `<p><b>Pagu induk Manual dinaikkan dulu</b>, karena SiRUP menolak tanpa pesan bila jumlah pagu anak melebihi pagu induknya:</p>
+            <div class="tbl"><table class="t"><tr><th>Level</th><th>Kode</th><th>Nama</th><th class="n">Pagu sekarang</th><th class="n">Pagu baru</th></tr>${naik.map(x => `<tr><td>${lv[x.level]}</td><td class="mono">${esc(x.key)}</td><td>${esc(x.nama)}</td><td class="n">${fmt(x.pagu)}</td><td class="n"><b>${fmt(x.paguBaru)}</b></td></tr>`).join('')}</table></div>
+            <p>Lalu node berikut dibuat:</p>` : ''}
+            <div class="tbl"><table class="t"><tr><th>Level</th><th>Kode</th><th>Nama</th><th class="n">Pagu</th><th></th></tr>${buat.map(n => `<tr><td>${lv[n.level]}</td><td class="mono">${esc(n.key)}</td><td>${esc(n.nama)}</td><td class="n">${fmt(n.pagu)}</td><td>${n.salinan ? '<span class="pill p-info">salinan induk</span>' : '<span class="pill p-ok">cabang baru</span>'}</td></tr>`).join('')}</table></div>
+            <p class="note">${naik.length ? `${naik.length} pagu induk dinaikkan, lalu ` : ''}${buat.length} node dibuat. Tindakan ini mengubah data SiRUP; node yang salah bisa dinonaktifkan lewat Kelola PKKR.</p>`);
+        if (!ok) return;
+        let tersentuh = 0;
+        try {
+            for (const x of naik) {             // induk dulu
+                if (S.stop) { log('Dihentikan.', 'w'); return; }
+                const r = await Sirup.ubahPkkr(x, { pagu: x.paguBaru });
+                tersentuh++;
+                const m = indukManual(x.key); if (m) m.pagu = r.pagu;
+                log(`PKKR Manual: pagu ${lv[x.level]} ${x.key} Rp${fmt(x.pagu)} → Rp${fmt(r.pagu)}`, 'o');
+                await Sirup.sleep(S.cfg.jeda);
+            }
+            for (const n of buat) {
+                if (S.stop) { log('Dihentikan.', 'w'); return; }
+                const parent = n.level === 'prog' ? null : indukManual(n.parentKey);
+                if (n.level !== 'prog' && !parent) throw new Error(`Induk Manual ${n.parentKey} belum ada — proses dihentikan.`);
+                if (!n.nama) throw new Error(`Nama ${n.key} kosong — isi dulu di tabel.`);
+                const rs = await Sirup.tambahPkkr(S.ctx, n, parent && parent.id, idPpk);
+                tersentuh++;
+                const id = await Sirup.cariNodeBaru(S.ctx, n.level, parent && parent.id, n.kode);
+                const lama = S.pkkr.get(n.key);
+                if (!id || (lama && !lama.manual && lama.id === id) || (lama && lama.manualTwin && lama.manualTwin.id === id && n.salinan === false)) {
+                    const muat = parent ? ` Pagu induk Rp${fmt(parent.pagu)}, anak Manual-nya Rp${fmt(paguAnakManual(parent))} + node baru Rp${fmt(n.pagu)}.` : '';
+                    throw new Error(`SiRUP tidak menyimpan ${lv[n.level]} ${n.key}${parent ? ` di bawah ${parent.key} (id ${parent.id})` : ''}. ${rs && rs.pesan ? 'Pesan SiRUP: ' + rs.pesan : 'SiRUP tidak memberi pesan — biasanya karena jumlah pagu anak melebihi pagu induk.'}${muat}`);
+                }
+                const node = { id, level: n.level, kode: n.kode, nama: n.nama, pagu: n.pagu, key: n.key, manual: true, parentId: parent && parent.id };
+                if (lama && !lama.manual) lama.manualTwin = node; else S.pkkr.set(n.key, node);
+                log(`PKKR Manual + ${lv[n.level]} ${n.key} (id ${id})`, 'o');
+                await Sirup.sleep(S.cfg.jeda);
+            }
+            log('Rantai PKKR Manual selesai.', 'o');
+        } finally {
+            // S.pkkr sudah diubah di memori → selalu baca ulang (juga bila gagal di tengah) supaya tabel dan rencana sesuai SiRUP
+            if (tersentuh) { log('Membaca ulang PKKR…'); await loadPkkr(true); S.an = null; go(1); }
+        }
     }
 
     // ── 2b. Penyesuaian node PKKR Manual ────────────────────────────────
@@ -321,7 +321,7 @@ const UI = (() => {
     const pkkrDipilih = x => pkkrPilih.has(kunciPkkr(x)) ? pkkrPilih.get(kunciPkkr(x)) : x.aksi === 'ubah' || x.bisa;
     const gantiPaguPkkr = x => Math.abs(x.paguBaru - x.pagu) > 1000;
     function rencanaPkkr() {
-        const adj = PkkrPlan.susun({ dipaNodes: S.dipa.nodes, pkkr: S.pkkr, pakets: S.pakets || [], swakelola: S.swakelola || [] });
+        const adj = PkkrPlan.susun({ dipaNodes: S.dipa.nodes, pkkr: S.pkkr, pakets: S.pakets || [], swakelola: S.swakelola || [], tertunda: S.pkkrTertunda || [], paketTerbaca: !!S.pakets });
         const dalam = x => x.key.split('.').length;
         // pemakaian belum bisa dicek sebelum paket RUP dibaca → jangan dinonaktifkan dulu
         adj.non = adj.nonaktif.map(x => ({ ...x, aksi: 'nonaktif', bisa: x.bisa && !!S.pakets }));
@@ -337,7 +337,10 @@ const UI = (() => {
         const adj = rencanaPkkr();
         const card = h('div', { class: 'card', style: { marginTop: '16px' } }, h('h3', {}, 'Penyesuaian PKKR Manual'),
             h('p', { class: 'note' }, 'Node hasil integrasi SAKTI terkunci sejak 31 Juli 2026; yang bisa disesuaikan hanya node Manual. Pagu salinan induk (Program/Kegiatan "(Manual)" dst.) = jumlah cabang Manual di bawahnya, pagu cabang Manual = pagu DIPA, catatan "[..]" dari SAKTI dibuang dari nama, dan node Manual yang tidak ada lagi di DIPA dinonaktifkan bila tidak dipakai paket mana pun.'));
+        S.pkkrTampil = new Set(adj.urut.map(kunciPkkr));
         if (!adj.manual) { card.append(h('div', { class: 'muted' }, 'Satker ini belum punya node PKKR Manual — tidak ada yang perlu disesuaikan.')); return card; }
+        if (adj.ditahan.length) card.append(h('div', { class: 'infobox' }, `Pagu ${adj.ditahan.map(x => `${LV_NAMA[x.level]} ${x.key} Rp${fmt(x.pagu)}`).join(', ')} tidak diturunkan dulu: masih ada cabang DIPA di bawahnya yang belum dibuat (jalankan "Tambahkan cabang terpilih").`));
+        if (adj.tanpaCabang.length) card.append(h('div', { class: 'infobox' }, `Salinan induk tanpa cabang Manual (rantai belum selesai dibuat): ${adj.tanpaCabang.map(x => `${LV_NAMA[x.level]} ${x.key} Rp${fmt(x.pagu)}`).join(', ')}. Pagunya dibiarkan; lanjutkan "Tambahkan cabang terpilih" di atas.`));
         if (!adj.ubah.length && !adj.non.length) { card.append(h('div', { class: 'okbox' }, `${adj.manual} node Manual sudah sesuai DIPA.`)); return card; }
         const tombol = [];
         const segar = () => { const n = adj.urut.filter(pkkrDipilih).length; for (const [b, f] of tombol) { b.disabled = !S.ctx.isKPA || !n; if (f) b.textContent = f(n); } };
@@ -379,6 +382,9 @@ const UI = (() => {
             adj = rencanaPkkr();
         }
         let daftar = adj.urut.filter(pkkrDipilih);
+        // yang dijalankan harus sama dengan yang tampil di tabel (PKKR bisa berubah sejak tabel digambar)
+        const tampil = S.pkkrTampil || new Set();
+        if (daftar.some(x => !tampil.has(kunciPkkr(x)))) { log('Rencana penyesuaian PKKR berubah sejak tabel ditampilkan. Tabel diperbarui — periksa lalu jalankan lagi.', 'w'); go(1); return; }
         if (satu) daftar = daftar.slice(0, 1);
         if (!daftar.length) { log('Tidak ada penyesuaian PKKR yang dipilih (atau node yang dipilih ternyata dipakai paket).', 'w'); go(1); return; }
         const ok = await confirmBox(satu ? 'Jalankan 1 penyesuaian PKKR' : `Jalankan ${daftar.length} penyesuaian PKKR`,
@@ -396,7 +402,7 @@ const UI = (() => {
                     log(`PKKR Manual: ${LV_NAMA[x.level]} ${x.key} dinonaktifkan`, 'o');
                 } else {
                     const gp = gantiPaguPkkr(x), gn = x.namaBaru !== x.nama;
-                    const r = await Sirup.ubahPkkr(x, { nama: gn ? x.namaBaru : null, pagu: gp ? x.paguBaru : null, alasan: 'Penyesuaian dengan DIPA revisi terakhir' });
+                    const r = await Sirup.ubahPkkr(x, { nama: gn ? x.namaBaru : null, pagu: gp ? x.paguBaru : null });
                     log(`PKKR Manual: ${LV_NAMA[x.level]} ${x.key} → ${[gp ? 'pagu Rp' + fmt(r.pagu) : '', gn ? `nama "${r.nama}"` : ''].filter(Boolean).join(', ')}`, 'o');
                 }
                 n++;

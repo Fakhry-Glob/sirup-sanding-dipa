@@ -49,16 +49,18 @@ const Sirup = (() => {
         catch (e) { throw new Error(`GET ${url.replace(BASE, '')} gagal (${e.message}).`); }
     }
     // pesan flash SiRUP (kotak alert) pada halaman berikutnya — dipakai untuk membaca alasan penolakan
+    // Pesan SiRUP (flash/validasi) di sebuah halaman. Flash hanya hidup untuk SATU permintaan berikutnya,
+    // jadi harus dibaca dari halaman tujuan redirect tepat setelah simpan.
+    function pesanHalaman(h) {
+        const d = new DOMParser().parseFromString(h || '', 'text/html');
+        // modal "Syarat dan Ketentuan" ada di setiap halaman → bukan pesan error
+        return [...d.querySelectorAll('#alert, .alert-danger, .alert-warning, .alert-success, .alert-info, label.error, span.error, .help-block')]
+            .filter(e => !e.closest('#popup, #overlay, .modal'))
+            .map(e => e.textContent.replace(/\s+/g, ' ').replace(/^×\s*/, '').trim())
+            .filter(t => t && !/Syarat dan Ketentuan|Kebijakan Privasi|Geser Ke Bawah/i.test(t)).join(' | ');
+    }
     async function bacaFlash(url) {
-        try {
-            const h = await getText(url);
-            const d = new DOMParser().parseFromString(h, 'text/html');
-            // modal "Syarat dan Ketentuan" ada di setiap halaman → bukan pesan error
-            return [...d.querySelectorAll('#alert, .alert-danger, .alert-warning, .alert-success, .alert-info, label.error, span.error, .help-block')]
-                .filter(e => !e.closest('#popup, #overlay, .modal'))
-                .map(e => e.textContent.replace(/\s+/g, ' ').replace(/^×\s*/, '').trim())
-                .filter(t => t && !/Syarat dan Ketentuan|Kebijakan Privasi|Geser Ke Bawah/i.test(t)).join(' | ');
-        } catch (e) { return ''; }
+        try { return pesanHalaman(await getText(url)); } catch (e) { return ''; }
     }
 
     async function dt(url, extra = '') {
@@ -145,31 +147,40 @@ const Sirup = (() => {
             case 'prog':
                 add('program.id', ''); add('program.tahun_anggaran', T); add('program.id_satker', S);
                 add('program.id', ''); add('program.nama', node.nama); add('program.kode_programs', node.kode); add('program.pagu', node.pagu); add('isEdit', '');
-                return post(`${BASE}/programctr/simpanprogram`, f);
+                return kirimPkkr(`${BASE}/programctr/simpanprogram`, f, 'programctr/index');
             case 'keg':
                 add('kegiatan.tahun_anggaran', T); add('isEdit', ''); add('kegiatan.id_satker', S); add('kegiatan.id_program', parentId); add('kegiatan.id', '');
                 add('kegiatan.nama', node.nama); add('kegiatan.kode_kegiatans', node.kode); add('kegiatan.pagu', node.pagu); add('kegiatan.id_ppk', idPpk || '');
-                return post(`${BASE}/programctr/simpankegiatan`, f);
+                return kirimPkkr(`${BASE}/programctr/simpankegiatan`, f, `programctr/indexkegiatan?idProgram=${parentId}`);
             case 'kro':
                 add('output.id', ''); add('output.tahun_anggaran', T); add('output.id_kegiatan', parentId); add('isEdit', ''); add('output.id_satker', S);
                 add('output.nama', node.nama); add('output.kode_output_string', node.kode); add('output.pagu', node.pagu); add('output.id_ppk', idPpk || '');
-                return post(`${BASE}/programctr/simpanoutput`, f);
+                return kirimPkkr(`${BASE}/programctr/simpanoutput`, f, `programctr/indexoutput?idKegiatan=${parentId}`);
             case 'ro':
                 add('suboutput.id', ''); add('suboutput.tahun_anggaran', T); add('suboutput.id_output', parentId); add('isEdit', ''); add('suboutput.id_satker', S);
                 add('suboutput.nama', node.nama); add('suboutput.kode_suboutput_string', node.kode); add('suboutput.pagu', node.pagu); add('suboutput.id_ppk', idPpk || '');
-                return post(`${BASE}/programctr/simpansuboutput`, f);
+                return kirimPkkr(`${BASE}/programctr/simpansuboutput`, f, `programctr/indexsuboutput?idOutput=${parentId}`);
             case 'komp':
                 add('komponen.id', ''); add('komponen.tahun_anggaran', T); add('komponen.id_suboutput', parentId); add('komponen.satkerID', S);
                 add('komponen.nama', node.nama); add('komponen.kode_komponen_string', node.kode); add('komponen.pagu', node.pagu); add('komponen.id_ppk', idPpk || '');
-                return post(`${BASE}/programctr/simpankomponen`, f);
+                return kirimPkkr(`${BASE}/programctr/simpankomponen`, f, `programctr/indexkomponen?idSubOutput=${parentId}`);
             case 'sub':
                 add('subkomponen.id', ''); add('subkomponen.tahun_anggaran', T); add('subkomponen.id_komponen', parentId); add('subkomponen.satkerID', S);
                 add('subkomponen.nama', node.nama); add('subkomponen.kode_subkomponen_string', node.kode); add('subkomponen.pagu', node.pagu); add('subkomponen.id_ppk', idPpk || '');
-                return post(`${BASE}/programctr/simpansubkomponen`, f);
+                return kirimPkkr(`${BASE}/programctr/simpansubkomponen`, f, `programctr/indexsubkomponen?idKomponen=${parentId}`);
         }
         throw new Error('Level PKKR tidak dikenal: ' + node.level);
     }
     // cari id node yang baru dibuat (berdasarkan kode di bawah induk)
+    // POST simpan node PKKR lalu langsung buka halaman tujuan redirect-nya (rekaman 30 Sep & 2 Okt 2026:
+    // index, indexkegiatan?idProgram=, indexoutput?idKegiatan=, indexsuboutput?idOutput=, indexkomponen?idSubOutput=,
+    // indexsubkomponen?idKomponen=) untuk menangkap pesan SiRUP. Penolakan karena pagu anak melebihi induk tidak
+    // memberi pesan, jadi keberhasilan tetap dicek dari daftar node.
+    async function kirimPkkr(url, body, tujuan) {
+        const r = await post(url, body);
+        r.pesan = await bacaFlash(`${BASE}/${tujuan}`);
+        return r;
+    }
     async function cariNodeBaru(ctx, level, parentId, kode) {
         const i = PKKR_LV.findIndex(l => l[0] === level);
         const [, ep, param] = PKKR_LV[i];
@@ -197,24 +208,33 @@ const Sirup = (() => {
         if (!f) throw new Error(`Form ubah ${node.key} tidak terbuka.`);
         return { F, f };
     }
-    // Ubah nama/pagu node Manual: kirim form Ubah SiRUP apa adanya, hanya nama/pagu (dan alasan bila kosong) yang diganti
-    async function ubahPkkr(node, { nama, pagu, alasan }) {
+    // Alasan baku form "Ubah" PKKR (sama di semua level): 1 Pengurangan Anggaran, 2 Penambahan Anggaran, 3 Pembatalan,
+    // 4 Kesalahan Penulisan, 5 Lainnya, 6 Delegasi kepada PPK. Tanpa pilihan ini SiRUP menolak (kembali ke form ubah).
+    const ALASAN_PKKR = { turun: '1', naik: '2', nama: '4' };
+    // Ubah nama/pagu node Manual: kirim form Ubah SiRUP apa adanya; yang diganti hanya nama/pagu dan alasan baku
+    // (kolom alasan bebas dibiarkan seperti di form: SiRUP mengosongkannya untuk alasan 1-4)
+    async function ubahPkkr(node, { nama, pagu }) {
         const { F, f } = await bacaFormPkkr(node);
-        const roNama = f.entries.some(([k]) => k === `${F.prefix}.nama`) ? null : 'tidak ada';
-        if (roNama) throw new Error(`Form ubah ${node.key} tidak memuat isian nama — node mungkin node Integrasi.`);
+        if (!f.entries.some(([k]) => k === `${F.prefix}.nama`)) throw new Error(`Form ubah ${node.key} tidak memuat isian nama — node mungkin node Integrasi.`);
+        const lama = +nilaiForm(f, `${F.prefix}.pagu`) || 0;
+        const arah = pagu != null && Math.round(pagu) > lama ? 'naik' : pagu != null && Math.round(pagu) < lama ? 'turun' : 'nama';
         const body = new URLSearchParams();
         for (const [k, v] of f.entries) {
             if (k === `${F.prefix}.nama` && nama != null) body.append(k, nama);
             else if (k === `${F.prefix}.pagu` && pagu != null) body.append(k, String(Math.round(pagu)));
-            else if (k === `${F.prefix}.alasan` && !v) body.append(k, alasan || 'Penyesuaian dengan DIPA revisi terakhir');
+            else if (k === `${F.prefix}.id_predifine`) body.append(k, v || ALASAN_PKKR[arah]);
             else body.append(k, v);
         }
-        const r = await post(f.action, body);
-        if (!r.redirected) throw new Error(`Perubahan ${node.key} ditolak: ${await pesanError(r)}`);
-        const cek = (await bacaFormPkkr(node)).f;   // verifikasi dari form yang sama
+        await post(f.action, body);
+        // tujuan redirect = form ubah (bila ditolak) atau daftar; form ubah dibaca SEKALI: nilai tersimpan + pesan SiRUP
+        const h = await getText(`${BASE}/${F.edit}${node.id}`);
+        const cek = formDari(h, /programctr\/simpan/i);
+        if (!cek) throw new Error(`Form ubah ${node.key} tidak terbuka setelah disimpan.`);
         const pg = +nilaiForm(cek, `${F.prefix}.pagu`) || 0, nm = nilaiForm(cek, `${F.prefix}.nama`) || '';
-        if ((pagu != null && Math.abs(pg - Math.round(pagu)) > 1) || (nama != null && nm.trim() !== nama.trim()))
-            throw new Error(`SiRUP tidak menyimpan perubahan ${node.key} (terbaca: ${nm} · Rp${pg}). ${await bacaFlash(`${BASE}/${PKKR_FORM[node.level].edit}${node.id}`)}`);
+        if ((pagu != null && Math.abs(pg - Math.round(pagu)) > 1) || (nama != null && nm.trim() !== nama.trim())) {
+            const pesan = pesanHalaman(h);
+            throw new Error(`SiRUP tidak menyimpan perubahan ${node.key} (terbaca: ${nm} · Rp${pg}).${pesan ? ' Pesan SiRUP: ' + pesan : ' SiRUP tidak memberi pesan — kemungkinan pagu anak-anaknya melebihi pagu baru, atau pagu induknya tidak cukup.'}`);
+        }
         return { nama: nm, pagu: pg };
     }
     // Nonaktifkan node Manual: buka dialog konfirmasi SiRUP, kirim form-nya (metode mengikuti form: GET bila tidak ditulis)

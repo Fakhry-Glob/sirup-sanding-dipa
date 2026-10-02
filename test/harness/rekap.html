@@ -46,13 +46,32 @@ window.pdfjsLib = { GlobalWorkerOptions: {} };
     Sirup.crawlPkkr = () => tunda(new Map([...pkkrDb.entries()].map(([k, n]) => [k, JSON.parse(JSON.stringify(n))])));
     window.pkkrDb = pkkrDb;
     const manualDi = (key, id) => { const n = pkkrDb.get(key); return n && (n.manual ? n : n.manualTwin) && String((n.manual ? n : n.manualTwin).id) === String(id) ? (n.manual ? n : n.manualTwin) : null; };
+    // aturan SiRUP yang ditiru: jumlah pagu anak tidak boleh melebihi pagu induk (tambah node ditolak tanpa pesan)
+    const semuaNode = () => [...pkkrDb.values()].flatMap(n => [n, n.manualTwin].filter(Boolean));
+    const anakDari = pid => semuaNode().filter(x => String(x.parentId) === String(pid));
+    const nodeId = id => semuaNode().find(x => String(x.id) === String(id));
+    const jml = xs => xs.reduce((t, x) => t + (+x.pagu || 0), 0);
     Sirup.ubahPkkr = (node, { nama, pagu }) => {
         catat('ubahPkkr', [node.key, nama, pagu]);
         const m = manualDi(node.key, node.id);
         if (!m) return Promise.reject(new Error(`node ${node.key} (${node.id}) tidak ditemukan`));
+        if (pagu != null) {
+            const p = m.parentId && nodeId(m.parentId);
+            if (pagu < jml(anakDari(m.id)) || (p && jml(anakDari(p.id).filter(x => x !== m)) + pagu > +p.pagu))
+                return Promise.reject(new Error(`SiRUP tidak menyimpan perubahan ${node.key} (tiruan: pagu anak melebihi induk)`));
+        }
         if (nama != null) m.nama = nama; if (pagu != null) m.pagu = Math.round(pagu);
         return tunda({ nama: m.nama, pagu: m.pagu });
     };
+    let idNode = 99900000;
+    Sirup.tambahPkkr = (ctx, node, parentId) => {
+        catat('tambahPkkr', [node.key, node.pagu, parentId]);
+        if (parentId) { const p = nodeId(parentId); if (!p || jml(anakDari(parentId)) + (+node.pagu || 0) > +p.pagu) return tunda({ pesan: '' }); }
+        const n = { id: String(++idNode), level: node.level, kode: node.kode, nama: node.nama, pagu: +node.pagu, key: node.key, manual: true, parentId: parentId ? String(parentId) : null };
+        const ada = pkkrDb.get(node.key); if (ada && !ada.manual) ada.manualTwin = n; else pkkrDb.set(node.key, n);
+        return tunda({ pesan: '' });
+    };
+    Sirup.cariNodeBaru = (ctx, level, parentId, kode) => tunda((semuaNode().filter(x => x.manual && x.level === level && x.kode === kode && (level === 'prog' || String(x.parentId) === String(parentId))).sort((a, b) => b.id - a.id)[0] || {}).id || null);
     Sirup.nonaktifkanPkkr = node => {
         catat('nonaktifkanPkkr', node.key);
         const n = pkkrDb.get(node.key);
