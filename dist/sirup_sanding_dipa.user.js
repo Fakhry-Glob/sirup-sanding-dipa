@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SiRUP Sanding DIPA ↔ RUP & Revisi Massal
 // @namespace    https://github.com/Fakhry-Glob
-// @version      1.4.1
+// @version      1.4.2
 // @description  Sanding PDF DIPA SAKTI (RKK / FA Detail 16 Segmen) dengan PKKR dan RUP terumumkan di SiRUP pasca-putus integrasi SAKTI (31 Juli 2026): tambah dan sesuaikan PKKR Manual, klasifikasi pengadaan/non-pengadaan, kartu keputusan per kelompok, daftar pengajuan revisi dengan pratinjau isian, revisi satu-ke-satu/satu-ke-banyak lewat antrean, pembatalan yang bisa diaktifkan kembali, umumkan, dan samakan Struktur Anggaran.
 // @author       Fakhry-Glob
 // @homepageURL  https://github.com/Fakhry-Glob/sirup-sanding-dipa
@@ -17,7 +17,7 @@
 
 (function () {
 'use strict';
-const APP_VERSION = '1.4.1';
+const APP_VERSION = '1.4.2';
 
 const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
@@ -272,8 +272,21 @@ const DipaParser = (() => {
         const nodes = new Map(), items = [];
         const ctx = {};
         let last = null;
+        const rapikan = s => s.replace(/\s*\[[^\]]*\]\s*/g, ' ').replace(/\s+/g, ' ').trim(); // buang catatan [..] SAKTI
         for (const pg of pages) {
             const sc = pg.width / 842; // kolom dinormalisasi ke lebar 842pt
+            // Nama node yang terbungkus: SAKTI menaruh potongan nama DI ATAS dan DI BAWAH baris kodenya, sedangkan baris
+            // kodenya sendiri tanpa nama (mis. RBJ.725 "Gedung, … Ditingkatkan" / "Kapasitasnya"). Potongan di kolom
+            // uraian node (x 55-95) ditampung, lalu dipasangkan ke baris node terdekat (sebelum atau sesudahnya).
+            // Tiap level punya kolom nama sendiri, jadi potongan hanya dipasangkan ke node yang kolomnya cocok
+            // (Sub Komponen 622035 301.GA: potongan pertamanya lebih dekat ke Komponen 301 di atasnya).
+            let nodeAkhir = null;
+            const yatim = [];
+            const KOLOM = { keg: [53, 62], komp: [53, 62], ro: [62, 75], sub: [75, 88], akun: [88, 95] };
+            const cocok = (f, lvl) => !!KOLOM[lvl] && f.x >= KOLOM[lvl][0] && f.x < KOLOM[lvl][1];
+            const lepas = () => {
+                for (const f of yatim.splice(0)) if (nodeAkhir && cocok(f, nodeAkhir.node.level) && f.y - nodeAkhir.y <= 16) nodeAkhir.node.uraian = rapikan(nodeAkhir.node.uraian + ' ' + f.teks);
+            };
             for (const ln of pg.lines) {
                 const t = ln.text;
                 if (!meta.satker) {
@@ -312,7 +325,10 @@ const DipaParser = (() => {
                 else if (x >= 48 && x < 62 && /^\d{6}$/.test(first)) lvl = 'akun';
                 else if (x >= 90 && /^\d{6}\.$/.test(first)) lvl = 'item';
                 if (!lvl) {
-                    if (last && x >= 90) {
+                    if (x >= 53 && x < 95) { yatim.push({ y: ln.y, x, teks: left.map(i => i.s).join(' ') }); continue; }
+                    // sambungan uraian item hanya dari kolom item (x 95-110); kepala tabel "Uraian" (x ±165) di awal
+                    // halaman berikutnya dulu ikut tertempel ke item terakhir
+                    if (last && x >= 95 && x < 110) {
                         last.uraian += ' ' + left.map(i => i.s).join(' ');
                         if (last.pagu == null && pagu != null) Object.assign(last, { pagu, realisasi: realisasi || 0 });
                     }
@@ -320,15 +336,27 @@ const DipaParser = (() => {
                 }
                 rest = rest.trim();
                 if (lvl === 'item') {
+                    lepas(); nodeAkhir = null;
                     last = { key: keyOf(ctx, 'akun'), no: first.replace('.', ''), uraian: rest, pagu, realisasi: realisasi || 0, sisa };
                     items.push(last);
                     continue;
                 }
                 setLevel(ctx, lvl, code);
                 const key = keyOf(ctx, lvl);
-                nodes.set(key, { key, level: lvl, kode: code, uraian: rest.replace(/\s*\[[^\]]*\]\s*/g, ' ').trim(), pagu }); // buang catatan [..] SAKTI
+                // potongan di antara node sebelumnya dan node ini masuk ke yang lebih dekat
+                const depan = [];
+                for (const f of yatim.splice(0)) {
+                    const keSini = ln.y - f.y, keSana = nodeAkhir ? f.y - nodeAkhir.y : Infinity;
+                    const okSini = cocok(f, lvl) && keSini <= 16, okSana = !!nodeAkhir && cocok(f, nodeAkhir.node.level) && keSana <= 16;
+                    if (okSini && (!okSana || keSini <= keSana)) depan.push(f.teks);
+                    else if (okSana) nodeAkhir.node.uraian = rapikan(nodeAkhir.node.uraian + ' ' + f.teks);
+                }
+                const node = { key, level: lvl, kode: code, uraian: rapikan([...depan, rest].join(' ')), pagu };
+                nodes.set(key, node);
+                nodeAkhir = { node, y: ln.y };
                 last = null;
             }
+            lepas();
         }
         return { meta, nodes, items };
     }
@@ -2553,6 +2581,9 @@ const UI = (() => {
     async function runPkkr(nodes, idPpk) {
         const { buat, naik } = PkkrPlan.rencanaTambah({ pilih: nodes.filter(n => n.pilih), pkkr: S.pkkr, dipaNodes: S.dipa.nodes });
         if (!buat.length) return;
+        // semua nama dicek sebelum ada yang diubah, supaya proses tidak berhenti di tengah rantai
+        const tanpaNama = buat.filter(n => !String(n.nama || '').trim());
+        if (tanpaNama.length) throw new Error(`Nama belum terisi untuk ${tanpaNama.map(n => n.key).join(', ')}. Isi di tabel sesuai DIPA (lihat RKK), atau unggah FA Detail bersama RKK di langkah 1. Belum ada yang diubah di SiRUP.`);
         const lv = LV_NAMA;
         const ok = await confirmBox('Tambah cabang PKKR (rantai Manual paralel)', `<p>SiRUP menolak cabang Manual di bawah node Integrasi, jadi cabang baru dibuat di <b>rantai PKKR Manual paralel</b> mulai dari Program (cara BPPP Tegal). Kode sama dengan DIPA, sehingga MAK paket tetap sama.</p>
             ${naik.length ? `<p><b>Pagu induk Manual dinaikkan dulu</b>, karena SiRUP menolak tanpa pesan bila jumlah pagu anak melebihi pagu induknya:</p>

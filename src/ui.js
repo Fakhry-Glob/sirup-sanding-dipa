@@ -269,6 +269,9 @@ const UI = (() => {
     async function runPkkr(nodes, idPpk) {
         const { buat, naik } = PkkrPlan.rencanaTambah({ pilih: nodes.filter(n => n.pilih), pkkr: S.pkkr, dipaNodes: S.dipa.nodes });
         if (!buat.length) return;
+        // semua nama dicek sebelum ada yang diubah, supaya proses tidak berhenti di tengah rantai
+        const tanpaNama = buat.filter(n => !String(n.nama || '').trim());
+        if (tanpaNama.length) throw new Error(`Nama belum terisi untuk ${tanpaNama.map(n => n.key).join(', ')}. Isi di tabel sesuai DIPA (lihat RKK), atau unggah FA Detail bersama RKK di langkah 1. Belum ada yang diubah di SiRUP.`);
         const lv = LV_NAMA;
         const ok = await confirmBox('Tambah cabang PKKR (rantai Manual paralel)', `<p>SiRUP menolak cabang Manual di bawah node Integrasi, jadi cabang baru dibuat di <b>rantai PKKR Manual paralel</b> mulai dari Program (cara BPPP Tegal). Kode sama dengan DIPA, sehingga MAK paket tetap sama.</p>
             ${naik.length ? `<p><b>Pagu induk Manual dinaikkan dulu</b>, karena SiRUP menolak tanpa pesan bila jumlah pagu anak melebihi pagu induknya:</p>

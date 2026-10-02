@@ -28,7 +28,7 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 
 | Langkah | Apa yang dilakukan | Mengubah SiRUP? |
 |---|---|---|
-| 1. Data & Login | Cek sesi login (role harus PAKPA/KPA), lalu unggah PDF **FA Detail 16 Segmen** dan/atau **Rincian Kertas Kerja Satker**. Parser memvalidasi jumlah item = total alokasi. | Tidak |
+| 1. Data & Login | Cek sesi login (role harus PAKPA/KPA), lalu unggah PDF **FA Detail 16 Segmen** dan/atau **Rincian Kertas Kerja Satker**. Satu file sudah cukup (FA diutamakan karena memuat pagu revisi terkini). RKK yang diunggah bersama FA melengkapi lokasi KRO (untuk paket baru), sumber dana per akun (penting untuk satker multi-dana), serta volume dan harga item. Parser memvalidasi jumlah item = total alokasi. | Tidak |
 | 2. Struktur PKKR | Membaca pohon Program › Kegiatan › KRO › RO › Komponen › Sub Komponen, lalu membandingkannya dengan DIPA. Cabang baru yang memuat belanja pengadaan bisa ditambahkan sebagai PKKR **Manual** (cabang gaji/non-pengadaan dilewati). **Penyesuaian PKKR Manual** menyamakan pagu/nama node Manual dengan DIPA dan menonaktifkan node Manual yang tidak ada lagi di DIPA bila tidak dipakai paket. | Ya, setelah konfirmasi |
 | 3. Sanding RUP | Membaca seluruh paket (JSON `paketpenyediadenormalisasibyid` + modal detail), mengklasifikasi tiap item DIPA (Pengadaan / Non / Perlu cek), dan menyandingkan per MAK 7 segmen. Klasifikasi bisa diubah per item. | Tidak |
 | 4. Rekap & Eksekusi | Empat sub-langkah dengan proyeksi RUP (sekarang → setelah rencana → target pagu pengadaan DIPA) yang selalu tampil: **Putuskan** (kartu kebijakan per kelompok), **Pengajuan revisi** (daftar satu baris = satu pengajuan ke SiRUP; klik untuk popup isian pengajuan seperti form revisi SiRUP, ubah isian/alasan, atau ajukan satu pengajuan saja), **Paket baru** (hanya MAK tanpa paket, dititipkan ke paket satu komponen), **Jalankan** (antrean yang memeriksa ulang SiRUP sebelum tiap langkah, bisa dijalankan satu per satu dan dilanjutkan; paket yang dibatalkan bisa diaktifkan kembali). | Ya, setelah konfirmasi |
@@ -114,6 +114,13 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
   dikurangkan dari capaian. Ambang Rp1 jt hanya berlaku untuk kekurangan (supaya tidak ada paket baru yang sangat kecil).
 - Teks yang dikirim ke SiRUP memakai tanda baca ASCII (`-`, `>`, `x`, `...`) supaya aman di ekspor/sistem lain.
 
+## Parser PDF FA Detail 16 Segmen (v1.4.2)
+
+- Halaman FA berupa landscape dengan teks diputar; kolom dikenali dari posisi x setelah diputar balik.
+- Nama node yang terbungkus ditaruh SAKTI **di atas dan di bawah** baris kodenya, dan baris kodenya sendiri tidak memuat nama (mis. RBJ.725: "Gedung, … Ditingkatkan" / "RBJ.725" / "Kapasitasnya"). Potongan di kolom uraian node dipasangkan ke baris node terdekat yang kolom namanya cocok (Kegiatan/Komponen x 53–62, RO 62–75, Sub Komponen 75–88, Akun 88–95). Sebelum v1.4.2, 331 dari 2.133 nama node di 45 PDF FA (Sep 2026) kosong, termasuk Kegiatan WA.2378 di hampir semua satker.
+- Sambungan uraian item hanya diambil dari kolom item (x 95–110). Sebelumnya kepala tabel "Uraian" di awal halaman berikutnya tertempel ke item terakhir (27 item di 626402).
+- `test/test_parser_fa.js` memeriksa semua PDF FA di satu folder: tidak ada nama node kosong dan tidak ada kepala tabel di uraian item. 5 dari 45 PDF di folder Sep 2026 (245124, 403818, 427536, 427602, 440043) tidak dikenali sebagai FA maupun RKK dan belum diperiksa.
+
 ## Pengaman untuk satker lain
 
 - PDF DIPA (dan RKK pendamping) harus milik satker yang sedang login, dengan tahun yang sama dengan tahun SiRUP.
@@ -165,6 +172,7 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 node build.js                      # gabung src/ → dist/
 node test/test_rencana.js          # uji rencana dengan data 626402 (test/data, tidak ikut git)
 node test/test_pkkr.js             # uji penyesuaian PKKR Manual (rantai Manual tiruan di atas PKKR 626402)
+SDR_FA_DIR="<folder PDF FA>" node test/test_parser_fa.js   # uji parser FA pada semua PDF FA di folder itu
 node test/plan_all_satker.js       # uji invarian rencana untuk 42 satker
 node test/debug_satker.js <kode>   # rincian rencana satu satker
 node test/cek_satker_pdf.js <pdf> [rup.json]   # pagu pengadaan per jenis belanja dari satu PDF + sanding dengan RUP
