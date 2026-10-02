@@ -91,7 +91,8 @@ const Sirup = (() => {
         if (ta) ctx.tahun = +ta;
         const ig = await getText(`${BASE}/integrasimonsaktictr/index`);
         ctx.kodeSatker = (ig.match(/name="satker\.id_satker"[^>]*value="(\d{6})"/) || [])[1] || '';
-        ctx.isKPA = /^(PAKPA|KPA|KPAD)$/i.test(ctx.role);
+        // nama peran berbeda antar-instalasi ("PAKPA", "KPA", "PA/KPA", "Kuasa Pengguna Anggaran"); PPK/PP bukan KPA
+        ctx.isKPA = /KPA|^PA$|pengguna anggaran/i.test(ctx.role) && !/^(PPK|PP|ADMIN)/i.test(ctx.role);
         return ctx;
     }
 
@@ -239,6 +240,27 @@ const Sirup = (() => {
         if (!kabCache.has(idProv)) kabCache.set(idProv, post(`${BASE}/selfservice/daftarkabupaten`, `id_provinsi=${idProv}`, { json: true }).then(a => a.map(k => ({ id: k.kbp_id, nama: k.kbp_nama }))).catch(() => []));
         return kabCache.get(idProv);
     }
+    // "KOTA JAKARTA PUSAT" / "KAB. BOGOR" (lokasi KRO di RKK) → {id_provinsi, id_kabupaten, prov, kab} SiRUP.
+    // Provinsi petunjuk dicoba lebih dulu; bila tidak ketemu semua provinsi dicari (hasilnya di-cache).
+    async function cariKabupaten(teks, provPetunjuk = []) {
+        const t = String(teks || '').toUpperCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (!t) return null;
+        const m = t.match(/^(KOTA ADM(?:INISTRASI)?|KOTA|KABUPATEN ADM(?:INISTRASI)?|KABUPATEN|KAB)\s+(.*)$/);
+        const jenis = m ? (/^KOTA/.test(m[1]) ? 'kota' : 'kab') : '';
+        const inti = (m ? m[2] : t).toLowerCase();
+        const cocok = nama => {
+            const n = nama.toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+            const mm = n.match(/^(.*?)\s*\((kota|kab)\s*\)?\s*$/);
+            const nInti = mm ? mm[1].trim() : n, nJenis = mm ? mm[2] : '';
+            return nInti === inti && (!jenis || !nJenis || nJenis === jenis);
+        };
+        const urut = [...new Set([...provPetunjuk.map(Number).filter(Boolean), ...PROVINSI.map((_, i) => i).filter(Boolean)])];
+        for (const pv of urut) {
+            const k = (await kabupaten(pv)).find(x => cocok(x.nama));
+            if (k) return { id_provinsi: pv, id_kabupaten: k.id, prov: PROVINSI[pv], kab: k.nama };
+        }
+        return null;
+    }
     async function alasanUmkm(tahun) {
         return post(`${BASE}/selfservice/daftaralasanumkm`, `tahunAnggaran=${tahun}`, { json: true }).then(a => a.map(x => x.alasan_umkm)).catch(() => []);
     }
@@ -324,11 +346,12 @@ const Sirup = (() => {
         let total = 0;
         pk.anggaran.forEach((a, i) => {
             const parts = a.mak.split('.');
+            const mak1 = a.kodeInstansi && a.kodeEselon && a.kodeSatker ? `${a.kodeInstansi}.${a.kodeEselon}.${a.kodeSatker}` : `${ctx.kodeBA}.${ctx.kodeEselon}.${ctx.kodeSatker}`;
             add(`paketAnggaran[${i}].id`, pk.baru ? '' : (a.idLama || ''));
-            add(`paketAnggaran[${i}].tahun_anggaran_dana`, ctx.tahun); add(`paketAnggaran[${i}].sumber_dana`, a.sumber || 2);
-            add(`paketAnggaran[${i}].asal_dana`, ctx.kodeKldi || 'K8'); add(`paketAnggaran[${i}].asal_dana_satker`, ctx.idSatker);
+            add(`paketAnggaran[${i}].tahun_anggaran_dana`, a.ta || ctx.tahun); add(`paketAnggaran[${i}].sumber_dana`, a.sumber || 2);
+            add(`paketAnggaran[${i}].asal_dana`, a.asal || ctx.kodeKldi || 'K8'); add(`paketAnggaran[${i}].asal_dana_satker`, a.asalSatker || ctx.idSatker);
             add(`paketAnggaran[${i}].id_dana_apbn`, a.danaApbn || 'A');
-            add(`paketAnggaran[${i}].mak1`, `${ctx.kodeBA}.${ctx.kodeEselon}.${ctx.kodeSatker}`);
+            add(`paketAnggaran[${i}].mak1`, mak1);
             add(`paketAnggaran[${i}].mak`, parts.slice(5).join('.'));          // SUB.AKUN
             add(`paketAnggaran[${i}].id_komponen`, a.idKomponen);               // id Komponen PKKR
             add(`paketAnggaran[${i}].pagu`, Math.round(a.pagu));
@@ -337,7 +360,7 @@ const Sirup = (() => {
         add('totalPaguBersih', total);
         let jenis = pk.jenisList && pk.jenisList.length ? pk.jenisList : [{ jenisid: JENIS_ID[pk.jenis] || 1, pagu: total }];
         if (jenis.length === 1) jenis = [{ ...jenis[0], jenisid: JENIS_ID[pk.jenis] || jenis[0].jenisid, pagu: total }];
-        jenis.forEach((j, i) => { add(`paketJenis[${i}].id`, pk.baru ? '' : (j.id || '')); add(`paketJenis[${i}].jenisid`, j.jenisid); add(`paketJenis[${i}].jumlah_pagu`, Math.round(j.pagu)); });
+        jenis.forEach((j, i) => { add(`paketJenis[${i}].id`, pk.baru ? '' : (j.id || (i === 0 ? pk.jenisIdLama : '') || '')); add(`paketJenis[${i}].jenisid`, j.jenisid); add(`paketJenis[${i}].jumlah_pagu`, Math.round(j.pagu)); });
         add('isTKDN', pk.pdn ? 'true' : 'false');
         add('isUMKM', pk.umkm ? 'true' : 'false');
         if (!pk.umkm) add('alasan_umkm', pk.alasanUmkm || (total > 15e9 ? 'Paket pengadaan Barang/Pekerjaan Konstuksi/Jasa Lainnya memiliki nilai Pagu Anggaran > Rp. 15 miliar.' : 'Kompetensi tidak sesuai dengan usaha kecil'));
@@ -353,6 +376,16 @@ const Sirup = (() => {
         add('isSelesai', isSelesai ? 'true' : 'false');
         return f;
     }
+
+    // Lengkapi konteks dari form SiRUP bila kode BA/eselon/satker/KLDI belum diketahui (satker tanpa data paket lengkap)
+    function lengkapiKonteks(ctx, tpl) {
+        if (!tpl) return;
+        const v = k => (tpl.entries.find(([n]) => n === k) || [])[1];
+        const mak1 = v('paketAnggaran[0].mak1');
+        if (mak1 && (!ctx.kodeBA || !ctx.kodeEselon || !ctx.kodeSatker)) { const [ba, es, sk] = mak1.split('.'); ctx.kodeBA = ctx.kodeBA || ba; ctx.kodeEselon = ctx.kodeEselon || es; ctx.kodeSatker = ctx.kodeSatker || sk; }
+        if (!ctx.kodeKldi && v('paket.kode_kldi')) ctx.kodeKldi = v('paket.kode_kldi');
+    }
+    const konteksLengkap = ctx => !!(ctx.kodeBA && ctx.kodeEselon && ctx.kodeSatker && ctx.idSatker && ctx.tahun);
 
     // Serialisasi form revisi SiRUP persis seperti browser mengirimnya (field bernama, tidak disabled,
     // checkbox/radio hanya yang tercentang, select = opsi terpilih). Form ini sudah terisi otomatis
@@ -417,14 +450,16 @@ const Sirup = (() => {
     // Trik KPA membuat paket tanpa akun PPK: revisi satu-ke-banyak atas paket existing.
     // Paket #1 = paket existing dibiarkan apa adanya; paket #2 dst. = paket baru.
     async function revisiSatuKeBanyak(ctx, donor, pakets, alasan, { onStep, dryRun } = {}) {
-        const ours = pakets.map((pk, i) => payloadPaket(ctx, donor, pk, i + 1, i === pakets.length - 1, alasan));
-        if (dryRun) return { payloads: ours.map((o, i) => gabungPayload(null, o, pakets[i])) };
+        if (dryRun) return { payloads: pakets.map((pk, i) => gabungPayload(null, payloadPaket(ctx, donor, pk, i + 1, i === pakets.length - 1, alasan), pk)) };
         const before = new Set((await daftarPaket(ctx.tahun)).map(p => p.id));
         const formUrl = n => `${BASE}/revisictr/formkajiulangsatukebanyak?count=${n}&penyediaAtauSwakelola=penyedia&id=${donor.id}&ispecah=false`;
         await getManual(`${BASE}/rup/kajiulangpaket?id=${donor.id}&penyediaAtauSwakelola=penyedia&jenisMtl=&jenis=satukebanyak`);
         const h0 = await getText(formUrl(1));
         let tpl = serializeForm(h0);
         if (!tpl) throw new Error(`Form revisi satu ke banyak paket ${donor.id} tidak terbuka (paket mungkin bukan status Terumumkan).`);
+        lengkapiKonteks(ctx, tpl);
+        if (!konteksLengkap(ctx)) throw new Error('Kode BA/eselon/satker tidak diketahui — baca ulang paket RUP (langkah 3) sebelum menjalankan revisi.');
+        const ours = pakets.map((pk, i) => payloadPaket(ctx, donor, pk, i + 1, i === pakets.length - 1, alasan));
         const terkirim = [];
         for (let i = 0; i < ours.length; i++) {
             const body = gabungPayload(tpl, ours[i], pakets[i]);
@@ -446,13 +481,15 @@ const Sirup = (() => {
     // Revisi satu ke satu: satu POST ke simpankajiulangonetoonepenyedia (payload = 1→N tanpa count/isSelesai).
     // Paket asal digantikan paket berkode baru berstatus Final Draft; KPA harus mengumumkannya lagi.
     async function revisiSatuKeSatu(ctx, paketAsal, pk, alasan, { dryRun } = {}) {
-        const ours = payloadPaket(ctx, paketAsal, pk, 1, true, alasan);
-        ours.delete('count'); ours.delete('isSelesai');
-        if (dryRun) return { payloads: [gabungPayload(null, ours, pk)] };
+        const buat = () => { const o = payloadPaket(ctx, paketAsal, pk, 1, true, alasan); o.delete('count'); o.delete('isSelesai'); return o; };
+        if (dryRun) return { payloads: [gabungPayload(null, buat(), pk)] };
         const before = new Set((await daftarPaket(ctx.tahun)).map(p => p.id));
         await getManual(`${BASE}/rup/kajiulangpaket?id=${paketAsal.id}&penyediaAtauSwakelola=penyedia&jenisMtl=&jenis=satukesatu`);
         const tpl = serializeForm(await getText(`${BASE}/revisictr/formkajiulangsatukesatu?penyediaAtauSwakelola=penyedia&id=${paketAsal.id}`));
         if (!tpl) throw new Error(`Form revisi satu ke satu paket ${paketAsal.id} tidak terbuka (paket mungkin bukan status Terumumkan).`);
+        lengkapiKonteks(ctx, tpl);
+        if (!konteksLengkap(ctx)) throw new Error('Kode BA/eselon/satker tidak diketahui — baca ulang paket RUP (langkah 3) sebelum menjalankan revisi.');
+        const ours = buat();
         const body = gabungPayload(tpl, ours, pk);
         body.delete('count'); body.delete('isSelesai');
         const r = await post(`${BASE}/revisictr/simpankajiulangonetoonepenyedia`, body);
@@ -463,7 +500,7 @@ const Sirup = (() => {
     }
 
     return {
-        context, crawlPkkr, tambahPkkr, cariNodeBaru, daftarPpk, daftarPaket, detailPaket, denorm, kabupaten, alasanUmkm,
+        context, crawlPkkr, tambahPkkr, cariNodeBaru, daftarPpk, daftarPaket, detailPaket, denorm, kabupaten, alasanUmkm, lengkapiKonteks, konteksLengkap, cariKabupaten,
         strukturAnggaran, simpanStrukturAnggaran, umumkan, batalFinalDraft, batalkanPaket, revisiSatuKeBanyak, revisiSatuKeSatu, payloadPaket, serializeForm, gabungPayload,
         bacaFlash, getManual, setLogger, JENIS_ID, METODE_ID, PROVINSI, isLoginPage, sleep,
     };

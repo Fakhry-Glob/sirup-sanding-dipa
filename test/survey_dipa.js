@@ -1,10 +1,13 @@
 // Survei lintas satker: parse semua PDF DIPA, klasifikasi, dan kumpulkan pola anomali.
-const pdfjs = require('C:/Users/user/AppData/Local/Temp/claude/C--Users-user--claude/589e9048-9827-43f0-9bf8-5984b0c2c222/scratchpad/pdfjs_test/node_modules/pdfjs-dist/legacy/build/pdf.js');
+const fs = require('fs'), path = require('path');
+const pdfjs = require('pdfjs-dist/legacy/build/pdf.js') // salinan lokal pdfjs-dist 3.11.174 di node_modules (tidak ikut git);
 const P = require('../src/dipa_parser.js');
 global.Classify = require('../src/classify.js');
 const A = require('../src/analysis.js');
-const fs = require('fs'), path = require('path');
-const DIRS = { FA: 'C:/Users/user/OneDrive/DOWNLOAD/FA_Detail_16_Segmen_2026_09', RKK: 'C:/Users/user/OneDrive/DOWNLOAD/Rincian_Kertas_Kerja_Satker_2026_DIPA_Fix' };
+// folder PDF: SDR_FA_DIR / SDR_RKK_DIR (default test/pdf/FA dan test/pdf/RKK)
+const DIRS = { FA: process.env.SDR_FA_DIR || path.join(__dirname, 'pdf', 'FA'), RKK: process.env.SDR_RKK_DIR || path.join(__dirname, 'pdf', 'RKK') };
+for (const [j, d] of Object.entries(DIRS)) if (!fs.existsSync(d)) { console.error(`Folder PDF ${j} tidak ada: ${d}
+Atur SDR_FA_DIR dan SDR_RKK_DIR, mis. SDR_FA_DIR="D:/FA_Detail" node test/survey_dipa.js`); process.exit(1); }
 const OUT = path.join(__dirname, 'survey');
 fs.mkdirSync(OUT, { recursive: true });
 (async () => {

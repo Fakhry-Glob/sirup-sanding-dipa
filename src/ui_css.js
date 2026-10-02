@@ -123,6 +123,26 @@ const CSS = `
 .sdr .actionbar .sum { flex: 1; color: var(--ink2); font-size: 13.5px; }
 .sdr .empty { text-align: center; color: var(--mut); padding: 34px; background: #fff; border: 1px dashed var(--line); border-radius: 12px; }
 
+/* langkah 4 v1.3: proyeksi, kartu keputusan, perubahan, antrean */
+.sdr .proj .kpi b { font-size: 21px; } .sdr .proj .kpi .ket { display: block; margin-top: 3px; font-size: 12px; color: var(--mut); }
+.sdr .proj .kpi.ok { border-color: #86efac; background: var(--ok-soft); } .sdr .proj .kpi.ok b { color: var(--ok); }
+.sdr .proj .kpi.warn { border-color: #fcd34d; background: var(--warn-soft); } .sdr .proj .kpi.warn b { color: var(--warn); }
+.sdr .kartu { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; }
+.sdr .kartu.belum { border-color: #fcd34d; box-shadow: inset 4px 0 0 #f59e0b; }
+.sdr .kartu-hd { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; margin-bottom: 8px; }
+.sdr .opsi { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 8px; margin-top: 10px; }
+.sdr .op { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; background: #fff; }
+.sdr .op:hover { border-color: var(--b2); } .sdr .op.on { border-color: var(--b2); background: var(--b-soft); }
+.sdr .op input { margin-top: 4px; accent-color: var(--b); } .sdr .op b { font-weight: 600; }
+.sdr .op small { display: block; color: var(--mut); font-size: 12.5px; margin-top: 2px; line-height: 1.45; } .sdr .op small.dampak { color: var(--ink2); font-weight: 600; }
+.sdr .sublabel { margin-top: 12px; font-size: 12.5px; font-weight: 700; color: var(--ink2); text-transform: uppercase; letter-spacing: .04em; }
+.sdr .grp-hd { display: flex; gap: 10px; align-items: baseline; margin: 18px 0 8px; color: var(--ink2); font-weight: 600; }
+.sdr .delta { font-size: 12.5px; font-variant-numeric: tabular-nums; } .sdr .delta.up { color: var(--ok); } .sdr .delta.down { color: var(--bad); }
+.sdr .sumber { margin-top: 6px; font-size: 12.5px; color: var(--mut); }
+.sdr .cek div { padding: 3px 0; } .sdr .cek .ok { color: var(--ok); } .sdr .cek .warn { color: var(--warn); } .sdr .cek .bad { color: var(--bad); font-weight: 600; }
+.sdr details.bulk > summary { font-weight: 650; color: var(--ink); }
+.sdr .cb2 { display: flex; flex-direction: column; gap: 6px; } .sdr .cb2 label { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--mut); cursor: pointer; }
+
 .sdr-modal { position: fixed; inset: 0; z-index: 99995; background: rgba(15,23,42,.5); display: flex; align-items: center; justify-content: center; padding: 20px; }
 .sdr-modal > div { background: #fff; border-radius: 14px; max-width: 940px; width: 100%; max-height: 86vh; overflow: auto; padding: 22px 24px; }
 `;

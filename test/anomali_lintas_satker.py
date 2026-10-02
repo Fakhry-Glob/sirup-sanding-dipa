@@ -1,10 +1,10 @@
 """Anomali lintas satker BPPSDMKP: DIPA (PDF SAKTI, diklasifikasi tool) x RUP publik SiRUP x detail MAK x Moner TW I.
-Input : test/survey/dipa_all.json (survey_dipa.js), scratchpad kkp_pub_2026.json, denorm_bp.json, moner_tw1.json
+Input : test/survey/dipa_all.json (survey_dipa.js), test/data/kkp_pub_2026.json, denorm_bp.json, moner_tw1.json
 Output: test/survey/anomali.json + ringkasan di stdout
 """
 import json, re, sys, collections, subprocess, os
 sys.stdout.reconfigure(encoding='utf-8')
-SP = 'C:/Users/user/AppData/Local/Temp/claude/C--Users-user--claude/589e9048-9827-43f0-9bf8-5984b0c2c222/scratchpad/'
+SP = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data') + '/'
 HERE = os.path.dirname(__file__)
 dipa = json.load(open(os.path.join(HERE, 'survey', 'dipa_all.json'), encoding='utf-8'))
 pub = json.load(open(SP + 'kkp_pub_2026.json', encoding='utf-8'))

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Uji UI Sanding DIPA</title>
+<style>body { margin: 0; background: #e5e7eb; font: 14px "Segoe UI", sans-serif; } #info { padding: 10px 16px; }</style>
+</head>
+<body>
+<div id="info">Halaman uji lokal: skrip userscript dengan API SiRUP tiruan (data 626402). Tidak ada koneksi ke SiRUP.</div>
+<a id="user-logout" style="display:none"></a>
+<script>
+// pdf.js / ExcelJS tidak dipakai di uji ini
+window.pdfjsLib = { GlobalWorkerOptions: {} };
+</script>
+<script src="fixture.js"></script>
+<script src="../../dist/sirup_sanding_dipa.user.js"></script>
+<script>
+(function () {
+    const { Sirup, UI } = window.__sdrDebug;
+    const FIX = window.FIX;
+    const tunda = (v, ms = 30) => new Promise(r => setTimeout(() => r(typeof v === 'function' ? v() : v), ms));
+    window.LOG_API = [];
+    const catat = (n, a) => { window.LOG_API.push([n, a]); console.log('[mock]', n, JSON.stringify(a).slice(0, 200)); };
+    // status paket tiruan (berubah saat "dijalankan")
+    const db = new Map(FIX.pakets.map(p => [p.id, JSON.parse(JSON.stringify(p))]));
+    let seq = 69000000;
+    Sirup.context = () => tunda({ login: true, nama: 'Uji KPA', role: 'PAKPA', satkerNama: FIX.dipa.meta.namaSatker, username: 'kpauji', tahun: 2026, idSatker: '14564', kodeSatker: '626402', isKPA: true });
+    Sirup.crawlPkkr = () => tunda(new Map(FIX.pkkr.map(n => [n.key, { ...n }])));
+    Sirup.daftarPpk = () => tunda([]);
+    Sirup.daftarPaket = (t, jenis) => tunda(jenis === 'swakelola' ? [] : [...db.values()].map(p => ({ id: p.id, jenisPaket: 'penyedia', nama: p.nama, pagu: p.pagu, status: p.status, aktif: p.aktif })));
+    Sirup.detailPaket = p => tunda(Object.assign(p, JSON.parse(JSON.stringify(db.get(p.id) || {}))), 1);
+    let SA = { id: '1', idSatker: '14564', barjas: 43707291000, modal: 25459000, sosial: 0, hibah: 0, lainnya: 0, diperbarui: '2026-07-01' };
+    Sirup.strukturAnggaran = () => tunda({ ...SA });
+    Sirup.simpanStrukturAnggaran = (sa, val) => { catat('simpanSA', val); SA = { ...SA, ...Object.fromEntries(Object.entries(val).map(([k, v]) => [k, Math.round(v)])), diperbarui: 'baru saja' }; return tunda({ ...SA }); };
+    Sirup.denorm = id => { const p = db.get(String(id)); return tunda(p ? { pagu: p.pagu, paket_anggaran_json: (p.sumberDana || []).map(r => ({ mak: r.mak, pagu: r.pagu })) } : {}, 1); };
+    // jumlah RUP terumumkan per jenis belanja menurut "SiRUP" tiruan (pembanding independen untuk uji)
+    window.rupDb = () => { const o = {}; for (const p of db.values()) if (p.status === '3' && p.aktif !== 'false') for (const r of p.sumberDana || []) { const k = String(r.mak).split('.').pop().slice(0, 2); o[k] = (o[k] || 0) + r.pagu; } return o; };
+    Sirup.alasanUmkm = () => tunda(['Paket pengadaan Barang/Pekerjaan Konstuksi/Jasa Lainnya memiliki nilai Pagu Anggaran > Rp. 15 miliar.', 'Kompetensi tidak sesuai dengan usaha kecil']);
+    Sirup.cariKabupaten = t => tunda(/JAKARTA PUSAT/i.test(t) ? { id_provinsi: 11, id_kabupaten: 14748, prov: 'DKI Jakarta', kab: 'Jakarta Pusat (Kota)' } : null);
+    Sirup.kabupaten = id => tunda(id === 11 ? [{ id: 14748, nama: 'Jakarta Pusat (Kota)' }, { id: 14749, nama: 'Jakarta Utara (Kota)' }] : id === 1 ? [{ id: 14609, nama: 'Aceh Besar (Kab.)' }] : []);
+    // aksi tulis tiruan
+    const revisi = (asal, pks) => { const p = db.get(asal); p.status = '51'; const baru = pks.map(pk => { const id = String(++seq); db.set(id, { id, nama: pk.nama || p.nama, pagu: pk.anggaran.reduce((s, a) => s + a.pagu, 0), status: '2', aktif: 'true', sumberDana: pk.anggaran.map(a => ({ ...a, id: '' })) }); return { id, status: '2' }; }); return { baru, donorHilang: true, terkirim: [] }; };
+    Sirup.umumkan = ids => { catat('umumkan', ids); ids.forEach(i => { const p = db.get(i); if (p) p.status = '3'; }); return tunda({}); };
+    Sirup.batalFinalDraft = (id, al) => { catat('batalFD', [id, al]); db.get(id).status = '12'; return tunda({}); };
+    Sirup.batalkanPaket = (id, al) => { catat('batal', [id, al]); db.get(id).status = '51'; return tunda({}); };
+    const asliSatu = Sirup.revisiSatuKeSatu, asliBanyak = Sirup.revisiSatuKeBanyak;
+    Sirup.revisiSatuKeSatu = (ctx, asal, pk, al, o = {}) => o.dryRun ? asliSatu(ctx, asal, pk, al, o) : (catat('1-1', [asal.id, pk.anggaran]), tunda(revisi(asal.id, [pk])));
+    Sirup.revisiSatuKeBanyak = (ctx, asal, pks, al, o = {}) => o.dryRun ? asliBanyak(ctx, asal, pks, al, o) : (catat('1-N', [asal.id, pks.length]), tunda(revisi(asal.id, pks)));
+    // mulai: login → PDF (dari fixture) → langkah 4
+    window.mulai = async (tab) => {
+        UI.mount(); UI.open();
+        await tunda(null, 300);
+        UI.S.dipa = { meta: FIX.dipa.meta, check: FIX.dipa.check, nodes: new Map(FIX.dipa.nodes.map(n => [n.key, n])), items: FIX.dipa.items };
+        UI.S.dipaFile = 'fixture';
+        document.querySelectorAll('.sdr-step')[2].click();
+        for (let i = 0; i < 100 && !UI.S.pakets; i++) await tunda(null, 100);
+        document.querySelectorAll('.sdr-step')[3].click();
+        for (let i = 0; i < 100 && !document.querySelector('.proj'); i++) await tunda(null, 100);
+        if (tab) [...document.querySelectorAll('.seg button')].find(b => b.textContent.startsWith(tab)).click();
+        return 'siap';
+    };
+    window.addEventListener('error', e => { window.GALAT = (window.GALAT || []).concat(String(e.message)); });
+    window.addEventListener('unhandledrejection', e => { window.GALAT = (window.GALAT || []).concat(String(e.reason && e.reason.message || e.reason)); });
+    try { localStorage.clear(); } catch (e) { }
+    window.mulai();
+})();
+</script>
+</body>
+</html>

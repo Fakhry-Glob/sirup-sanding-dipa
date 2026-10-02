@@ -1,3 +1,6 @@
 node_modules/
 test/survey/
 *.log
+test/harness/fixture.js
+test/data/
+test/pdf/
