@@ -14,7 +14,7 @@ Sejak itu RKA/PKKR di SiRUP beku di revisi terakhir sebelum cutoff, sehingga DIP
 
 3. Buka [sirup.inaproc.id](https://sirup.inaproc.id/sirup/), lalu login dengan akun **KPA** satker. Tombol "⇄ Sanding DIPA ↔ RUP" muncul di kanan bawah.
 
-Pembaruan berjalan otomatis: Tampermonkey memeriksa versi baru dari tautan yang sama. Untuk memeriksa segera, buka Dashboard Tampermonkey → *Check for userscript updates*.
+Pembaruan berjalan otomatis. Tampermonkey hanya mengunduh `dist/sirup_sanding_dipa.meta.js` (blok metadata, ±1 KB) untuk membandingkan `@version`. Skrip lengkap baru diunduh bila versinya lebih tinggi. Untuk memeriksa segera, buka Dashboard Tampermonkey → *Check for userscript updates*.
 Bila skrip versi lama pernah dipasang manual dengan nama yang sama, instalasi ini menimpanya.
 
 Sebelum menjalankan perubahan di SiRUP:
@@ -118,6 +118,12 @@ File yang dipasang: `dist/sirup_sanding_dipa.user.js` (hasil `node build.js`).
 - Paket swakelola hanya dihitung jumlahnya, belum disandingkan per MAK.
 - Kelebihan besar (mis. modernisasi tahun jamak) tidak pernah dipotong otomatis. Kartunya wajib diputuskan pengguna.
 - Eksekutor 1→1, 1→N (termasuk draft #1 yang dikoreksi), dan "umumkan lalu revisi" untuk final draft belum pernah dijalankan tool ini di produksi. Uji pertama sebaiknya satu langkah dulu ("Jalankan 1 langkah").
+
+## Merilis pembaruan
+
+1. Naikkan `@version` di `src/header.js`, misalnya 1.3.2 → 1.3.3. Tanpa ini, pengguna tidak menerima pembaruan.
+2. Jalankan `node build.js`. Perintah ini menulis `dist/sirup_sanding_dipa.user.js` dan `dist/sirup_sanding_dipa.meta.js` dari header yang sama.
+3. Commit **kedua file `dist/`** bersama perubahan `src/`, lalu push ke `main`.
 
 ## Pengembangan
 

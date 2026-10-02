@@ -1,8 +1,10 @@
 // Menggabungkan modul src/ menjadi satu userscript Tampermonkey.
-// node build.js  →  dist/sirup_sanding_dipa.user.js
+// node build.js  →  dist/sirup_sanding_dipa.user.js (skrip lengkap, @downloadURL)
+//                   dist/sirup_sanding_dipa.meta.js (blok metadata saja, @updateURL → cek versi ringan)
 const fs = require('fs');
 const path = require('path');
-const src = f => fs.readFileSync(path.join(__dirname, 'src', f), 'utf8').replace(/\nif \(typeof module !== 'undefined'\)[^\n]*\n?/g, '\n');
+// akhir baris diseragamkan ke LF (checkout Windows memakai CRLF)
+const src = f => fs.readFileSync(path.join(__dirname, 'src', f), 'utf8').replace(/\r\n/g, '\n').replace(/\nif \(typeof module !== 'undefined'\)[^\n]*\n?/g, '\n');
 const header = src('header.js');
 const version = (header.match(/@version\s+(\S+)/) || [])[1];
 const body = [
@@ -15,4 +17,10 @@ const body = [
 const out = `${header}\n(function () {\n'use strict';\n${body}\n})();\n`;
 fs.mkdirSync(path.join(__dirname, 'dist'), { recursive: true });
 fs.writeFileSync(path.join(__dirname, 'dist', 'sirup_sanding_dipa.user.js'), out);
+// Tampermonkey mengunduh @updateURL setiap pemeriksaan pembaruan; cukup blok metadata (±1 KB, bukan ±260 KB).
+// Skrip lengkap baru diunduh dari @downloadURL bila @version di sini lebih tinggi dari yang terpasang.
+const meta = header.match(/\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==/);
+if (!meta) throw new Error('Blok metadata tidak ditemukan di src/header.js');
+fs.writeFileSync(path.join(__dirname, 'dist', 'sirup_sanding_dipa.meta.js'), meta[0] + '\n');
 console.log('dist/sirup_sanding_dipa.user.js', out.length, 'bytes, versi', version);
+console.log('dist/sirup_sanding_dipa.meta.js', meta[0].length + 1, 'bytes');
